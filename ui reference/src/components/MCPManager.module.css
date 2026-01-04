@@ -1,0 +1,155 @@
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 8px;
+}
+
+.mcpBar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+}
+
+.mcpItem {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 4px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    background-color: transparent;
+    color: var(--fg-muted);
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.mcpItem:hover {
+    background-color: var(--bg-card);
+    color: var(--fg-secondary);
+}
+
+.mcpItemSelected {
+    background-color: rgba(59, 130, 246, 0.05);
+    border-color: var(--border-accent);
+    color: var(--accent-primary);
+}
+
+.mcpItemConnected {
+    border-color: rgba(16, 185, 129, 0.3);
+    color: var(--accent-secondary);
+}
+
+.mcpItemError {
+    border-color: rgba(239, 68, 68, 0.3);
+    color: var(--accent-error);
+}
+
+.iconWrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.statusDot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--accent-secondary);
+    box-shadow: 0 0 6px var(--accent-secondary);
+}
+
+.dotOrange {
+    background-color: #f59e0b;
+    /* Amber 500 */
+    box-shadow: 0 0 6px #f59e0b;
+}
+
+.mcpLabel {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.actions {
+    display: flex;
+    gap: 8px;
+}
+
+.actionBtn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px;
+    border-radius: var(--radius-md);
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+}
+
+.connectBtn {
+    background-color: rgba(16, 185, 129, 0.05);
+    color: var(--accent-secondary);
+    border-color: rgba(16, 185, 129, 0.1);
+}
+
+.connectBtn:hover:not(:disabled) {
+    background-color: rgba(16, 185, 129, 0.15);
+}
+
+.disconnectBtn {
+    background-color: rgba(239, 68, 68, 0.05);
+    color: var(--accent-error);
+    border-color: rgba(239, 68, 68, 0.1);
+}
+
+.disconnectBtn:hover:not(:disabled) {
+    background-color: rgba(239, 68, 68, 0.15);
+}
+
+.actionBtn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background-color: var(--bg-card);
+    color: var(--fg-muted);
+    border-color: var(--border-subtle);
+}
+
+.successMsg {
+    text-align: center;
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: var(--accent-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    opacity: 0.6;
+    margin-top: 4px;
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}

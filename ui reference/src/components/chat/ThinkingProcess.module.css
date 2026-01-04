@@ -1,0 +1,142 @@
+.container {
+    margin: 12px 0;
+    width: 100%;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--fg-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.header:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--fg-primary);
+}
+
+.headerExpanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+}
+
+.icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-primary);
+}
+
+.iconThinking {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 0.4;
+    }
+
+    50% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0.4;
+    }
+}
+
+.label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--fg-muted);
+}
+
+.logsContainer {
+    background-color: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-subtle);
+    border-top: none;
+    border-bottom-left-radius: var(--radius-md);
+    border-bottom-right-radius: var(--radius-md);
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.logRow {
+    display: flex;
+    gap: 12px;
+    padding: 4px 0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.logIcon {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.logContent {
+    word-break: break-all;
+    white-space: pre-wrap;
+    color: var(--fg-secondary);
+}
+
+.type_error {
+    color: var(--accent-error);
+}
+
+.type_tool_call {
+    color: #f59e0b;
+}
+
+.type_result {
+    color: var(--accent-secondary);
+}
+
+.type_thought {
+    color: var(--accent-primary);
+}
+
+.type_status {
+    color: var(--fg-muted);
+}
+
+.thinkingRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 4px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent-primary);
+    opacity: 0.7;
+    animation: pulse 1.5s infinite;
+}
+
+.thinkingDot {
+    width: 4px;
+    height: 4px;
+    background-color: currentColor;
+    border-radius: 50%;
+}

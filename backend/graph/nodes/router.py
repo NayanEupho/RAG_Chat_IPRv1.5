@@ -1,0 +1,153 @@
+from backend.graph.state import AgentState
+from backend.llm.client import OllamaClientWrapper
+from langchain_core.messages import HumanMessage, AIMessage
+import re
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Keywords that suggest the user wants to chat, not search documents
+CHAT_KEYWORDS = [
+    "hello", "hi", "hey", "good morning", "good evening", "how are you",
+    "write me", "compose", "create a", "tell me a joke", "story about",
+    "your opinion", "translate", "code for", "script that"
+]
+
+# Keywords that suggest the user wants to search documents
+RAG_KEYWORDS = [
+    "document", "file", "report", "policy", "according to", "what is",
+    "what does", "summarize", "about", "describe", "find", "search",
+    "look up", "check", "verify", "based on", "compliance", "regulation",
+    "guideline", "procedure", "in the", "from the"
+]
+
+async def route_query(state: AgentState):
+    """
+    Analyzes the query and user-selected mode to determine intent.
+    """
+    original_query = state['messages'][-1].content
+    query_lower = original_query.lower()
+    mode = state.get('mode', 'auto').lower()
+    
+    # --- STEP 0: FORCED MODES ---
+    if mode == 'chat':
+        # Even if they select @file, if they forced 'Chat', we honor the mode for pure LLM interaction
+        logger.info("[ROUTER] Mode: Forced Chat")
+        return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+    
+    # Check for mentions regardless of mode if RAG is involved
+    mentions = re.findall(r"@([\w\-\. ]+?)(?=[,.;:!?\s]|$)", original_query)
+    mentions = [m.strip() for m in mentions if m.strip() and ('.' in m or len(m) > 3)]
+    cleaned_query = original_query
+    for m in mentions:
+        cleaned_query = cleaned_query.replace(f"@{m}", "")
+    cleaned_query = cleaned_query.strip()
+
+    if mode == 'rag':
+        logger.info(f"[ROUTER] Mode: Forced RAG (Mentions: {mentions})")
+        return {
+            "intent": "specific_doc_rag" if mentions else "direct_rag",
+            "query": cleaned_query if mentions else original_query,
+            "targeted_docs": mentions,
+            "documents": [],
+            "semantic_queries": []
+        }
+
+    # --- STEP 1: AUTO MODE (HEURISTICS) ---
+    # Analyze History for follow-up detection
+    last_bot_msg = None
+    for msg in reversed(state['messages'][:-1]):
+        if isinstance(msg, AIMessage):
+            last_bot_msg = msg
+            break
+            
+    is_follow_up = False
+    if last_bot_msg:
+        # If the last bot message was RAG-based and current query is short/vague
+        # we treat it as a RAG follow-up
+        short_query_threshold = 20
+        if len(original_query) < short_query_threshold or any(word in query_lower for word in ["why", "how", "tell me more", "explain"]):
+             is_follow_up = True
+             logger.info("[ROUTER] Context: Potential follow-up detected.")
+
+    # Specific file mentions always trigger RAG in Auto mode
+    if mentions:
+        logger.info(f"[ROUTER] Auto: specific_doc_rag (Mentions: {mentions})")
+        return {
+            "intent": "specific_doc_rag", 
+            "query": cleaned_query,
+            "targeted_docs": mentions,
+            "documents": [],
+            "semantic_queries": []
+        }
+
+    # Fast-Path Keyword Heuristics
+    for keyword in RAG_KEYWORDS:
+        if keyword in query_lower:
+            logger.info(f"[ROUTER] Auto Fast-Path: direct_rag (Keyword: '{keyword}')")
+            return {"intent": "direct_rag", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+
+    for keyword in CHAT_KEYWORDS:
+        if keyword in query_lower:
+            logger.info(f"[ROUTER] Auto Fast-Path: chat (Keyword: '{keyword}')")
+            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+
+    # --- STEP 2: AUTO MODE (SOTA SEMANTIC + VECTOR CHECK) ---
+    # This is the "Smart" part. We check if the Knowledge Base actually contains relevant info.
+    try:
+        from backend.rag.store import get_vector_store
+        store = get_vector_store()
+        
+        # Vector check...
+        from backend.llm.client import OllamaClientWrapper
+        embed_client = OllamaClientWrapper.get_embedding_client()
+        embed_model = OllamaClientWrapper.get_embedding_model_name()
+        
+        resp = await embed_client.embed(model=embed_model, input=[original_query])
+        emb = resp.get('embeddings', [[]])[0]
+        
+        results = store.collection.query(query_embeddings=[emb], n_results=1)
+        distances = results.get('distances', [[1.0]])[0]
+        has_knowledge = len(distances) > 0 and distances[0] < 0.8 
+        
+        if not has_knowledge and not is_follow_up:
+            logger.info("[ROUTER] Auto: No knowledge found & not a follow-up -> Chat")
+            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+            
+        # Final arbiter: Semantic LLM intent check
+        client = OllamaClientWrapper.get_chat_model()
+        
+        history_summary = ""
+        if state['messages'][:-1]:
+            # Just last 2 messages for routing context to keep it fast
+            for m in state['messages'][-3:-1]:
+                role = "User" if isinstance(m, HumanMessage) else "Assistant"
+                history_summary += f"{role}: {m.content[:50]}...\n"
+
+        system_prompt = (
+            "You are an expert intent classifier for a RAG system.\n"
+            "Analyze the LATEST QUERY in context of the HISTORY.\n"
+            "Intents:\n"
+            "1. 'direct_rag': User asks for facts, technical details, or follow-ups to a previous RAG answer.\n"
+            "2. 'chat': Casual talk, general greetings, or instructions unrelated to documents.\n\n"
+            "Output ONLY valid JSON: {\"intent\": \"direct_rag\" | \"chat\"}"
+        )
+        
+        prompt = f"{history_summary}\nLATEST QUERY: {original_query}"
+        
+        response = await client.ainvoke(
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+            format="json"
+        )
+        
+        result = json.loads(response.content)
+        intent = result.get("intent", "chat").lower()
+        
+        logger.info(f"[ROUTER] Auto Semantic Intent: {intent}")
+        return {"intent": intent, "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+            
+    except Exception as e:
+        logger.warning(f"[ROUTER] Smart Routing failed: {e}. Defaulting to RAG for safety.")
+
+    return {"intent": "direct_rag", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}

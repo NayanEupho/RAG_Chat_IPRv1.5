@@ -1,0 +1,189 @@
+.chatContainer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: transparent;
+    position: relative;
+}
+
+.messagesArea {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 40px;
+    position: relative;
+    scroll-behavior: smooth;
+}
+
+.messagesInner {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.loadingOverlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+    gap: 12px;
+}
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border-subtle);
+    border-top-color: var(--fg-secondary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.inputWrapper {
+    flex-shrink: 0;
+    padding-bottom: 24px;
+    z-index: 10;
+}
+
+/* Confirmation Modal */
+.overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background-color: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.modal {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-accent);
+    width: 100%;
+    max-width: 480px;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+}
+
+.modalHeader {
+    padding: 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.warningIcon {
+    color: var(--accent-error);
+}
+
+.modalTitle {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.modalSubtitle {
+    font-size: 0.75rem;
+    color: var(--fg-muted);
+}
+
+.modalContent {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.modalLabel {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.modalText {
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.codeBlock {
+    background-color: #000;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--accent-error);
+    overflow-x: auto;
+}
+
+.modalFooter {
+    padding: 16px;
+    background-color: rgba(255, 255, 255, 0.02);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    gap: 12px;
+}
+
+.cancelBtn {
+    flex: 1;
+    padding: 10px;
+    border-radius: var(--radius-md);
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.cancelBtn:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.approveBtn {
+    flex: 1;
+    padding: 10px;
+    border-radius: var(--radius-md);
+    background-color: var(--accent-error);
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: opacity 0.2s;
+}
+
+.approveBtn:hover {
+    opacity: 0.9;
+}
+
+.impactList {
+    margin: 8px 0 0 0;
+    padding: 0 0 0 16px;
+    list-style: disc;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.impactItem {
+    font-size: 0.8rem;
+    color: var(--fg-secondary);
+    line-height: 1.4;
+}

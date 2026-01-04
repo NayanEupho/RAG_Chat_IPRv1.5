@@ -1,0 +1,139 @@
+.container {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+.inputBar {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.inputBar:focus-within {
+    border-color: var(--border-accent);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.actionButton {
+    padding: 10px;
+    color: var(--fg-muted);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.actionButton:hover {
+    color: var(--fg-secondary);
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--fg-primary);
+    font-family: var(--font-sans);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    padding: 12px 4px;
+    resize: none;
+    min-height: 48px;
+    max-height: 200px;
+    outline: none;
+}
+
+.textarea::placeholder {
+    color: var(--fg-muted);
+}
+
+.rightActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+}
+
+.selectorWrapper {
+    padding-right: 8px;
+    border-right: 1px solid var(--border-subtle);
+}
+
+.submitBtn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background-color: var(--fg-primary);
+    color: var(--bg-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.submitBtn:hover {
+    opacity: 0.9;
+    transform: scale(1.05);
+}
+
+.submitBtn:disabled {
+    background-color: var(--bg-card);
+    color: var(--fg-muted);
+    cursor: not-allowed;
+    transform: none;
+    opacity: 0.5;
+}
+
+.stopBtn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background-color: var(--fg-primary);
+    color: var(--bg-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s;
+}
+
+.stopBtn:hover {
+    transform: scale(1.05);
+}
+
+.footerInfo {
+    margin-top: 12px;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+}
+
+.footerInfo:hover {
+    opacity: 0.6;
+}
+
+.footerLabel {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.footerDot {
+    width: 3px;
+    height: 3px;
+    background-color: var(--fg-muted);
+    border-radius: 50%;
+    align-self: center;
+}

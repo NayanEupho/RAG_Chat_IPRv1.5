@@ -1,0 +1,163 @@
+.container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100%;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+    padding: 48px 24px;
+    text-align: center;
+}
+
+.backdrop {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at center, rgba(255, 255, 255, 0.03) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+.spacer {
+    flex: 1;
+}
+
+.content {
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 800px;
+    width: 100%;
+}
+
+.logoWrapper {
+    margin-bottom: 40px;
+}
+
+.logo {
+    width: 64px;
+    height: 64px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-md);
+    color: var(--fg-primary);
+}
+
+.title {
+    font-size: 2.25rem;
+    font-weight: 600;
+    color: var(--fg-primary);
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+}
+
+.subtitle {
+    font-size: 1.1rem;
+    color: var(--fg-secondary);
+    max-width: 500px;
+    margin-bottom: 48px;
+    line-height: 1.6;
+}
+
+.suggestionsGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    width: 100%;
+    max-width: 650px;
+}
+
+.suggestionCard {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    text-align: left;
+    transition: all 0.2s;
+}
+
+.suggestionCard:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: var(--border-accent);
+    transform: translateY(-1px);
+}
+
+.suggestionIcon {
+    padding: 8px;
+    border-radius: var(--radius-md);
+    background-color: rgba(255, 255, 255, 0.03);
+    color: var(--fg-muted);
+    transition: color 0.2s;
+}
+
+.suggestionCard:hover .suggestionIcon {
+    color: var(--fg-primary);
+}
+
+.suggestionText {
+    flex: 1;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--fg-secondary);
+    transition: color 0.2s;
+}
+
+.suggestionCard:hover .suggestionText {
+    color: var(--fg-primary);
+}
+
+.arrow {
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: all 0.2s;
+    color: var(--fg-muted);
+}
+
+.suggestionCard:hover .arrow {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.capabilities {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 32px;
+    margin-top: 64px;
+    opacity: 0.3;
+    transition: opacity 0.3s;
+}
+
+.capabilities:hover {
+    opacity: 0.6;
+}
+
+.capability {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+
+@media (max-width: 640px) {
+    .suggestionsGrid {
+        grid-template-columns: 1fr;
+    }
+
+    .title {
+        font-size: 1.75rem;
+    }
+}

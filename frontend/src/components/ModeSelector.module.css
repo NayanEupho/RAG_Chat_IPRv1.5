@@ -1,0 +1,117 @@
+.container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin-bottom: 2px;
+    /* Slight offset to align with buttons */
+}
+
+.trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.5);
+    padding: 0 0.7rem;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    height: 38px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    backdrop-filter: blur(8px);
+}
+
+.trigger:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.trigger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.icon {
+    display: flex;
+    align-items: center;
+}
+
+.label {
+    font-weight: 500;
+}
+
+.chevron {
+    opacity: 0.6;
+    margin-left: 0.2rem;
+}
+
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+}
+
+.dropdown {
+    position: absolute;
+    bottom: 120%;
+    right: 0;
+    width: 140px;
+    background: rgba(20, 20, 25, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 0.3rem;
+    margin-bottom: 0.5rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 1001;
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(20px);
+    animation: slideUp 0.15s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.7rem;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    text-align: left;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+
+.item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+}
+
+.selected {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+    font-weight: 600;
+}
+
+.selected:hover {
+    background: rgba(59, 130, 246, 0.25);
+}
