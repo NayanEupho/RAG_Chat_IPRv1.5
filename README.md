@@ -66,6 +66,7 @@ graph TD
 ### 2. Installation & Launch
 ```bash
 # 1. Start Backend (Interactive Configuration Wizard)
+# Hint: Copy .env.example to .env for zero-click setup!
 uv run main.py
 
 # 2. Start Frontend
@@ -79,6 +80,10 @@ Visit **http://localhost:3000** to enter the Command Center.
 
 ## 📖 Component Deep-Dives
 - [**Architecture & Orchestration**](./Architecture_Guide.md): Detailed logic mapping of the LangGraph nodes.
+- [**API Server Encyclopedia**](./API_Server_Guide.md): Deep dive into FastAPI, SSE, and Request Lifecycles.
+- [**Database Encyclopedia Suite**](./Unified_Database_Guide.md): 
+    - [Vector Database (ChromaDB)](./Vector_Database_Encyclopedia.md)
+    - [Session History (SQLite)](./Session_History_Encyclopedia.md)
 - [**Debugging & Monitoring**](./DEBUG_SUITE_GUIDE.md): Guide to the maintenance and probing utilities.
-- [**RAG Strategies**](./RAG%20Strategies.md): technical breakdown of the ingestion and retrieval chain.
+- [**RAG Strategies**](./RAG%20Strategies.md): Technical breakdown of the ingestion and retrieval chain.
 - [**Usage Guides**](./Master_Usage.md): Setup and feature documentation for end-users.

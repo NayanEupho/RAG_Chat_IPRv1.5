@@ -14,7 +14,8 @@ Welcome to the **Master Architecture Guide**. This document is designed to take 
 5.  **[The Body] Ingestion & Storage**: Docling, Watchdog, and ChromaDB.
 6.  **[The Senses] The Frontend Layer**: Next.js, SSE, and Glassmorphism.
 7.  **[Hardening] Performance & Security**: Thread Safety and Local Sovereignty.
-8.  **[The Workshop] Maintenance Suite**: Rebuild, Probes, and Debugging.
+8.  **[Config] Hybrid Configuration System**: .env Logic and Validation.
+9.  **[The Workshop] Maintenance Suite**: Rebuild, Probes, and Debugging.
 
 ---
 
@@ -229,10 +230,62 @@ In an era of data leaks, this project is a fortress.
 ### 2. Performance Engineering
 - **Embedding Cache**: We MD5-hash every query. If you ask the same thing twice, we skip the embedding step and pull from memory.
 - **Thread-Resilient Clients**: Our `OllamaClientWrapper` creates fresh clients for each thread to prevent the "Asyncio Loop Conflict" that crashes most Python RAG apps.
+- **Hybrid Configuration (.env)**: A zero-dependency configuration system that balances automation (persistent settings) with interactive flexibility (Wizard fallback), ensuring that host and model settings are validated against the actual provider before the server locks them into the process environment.
 
 ---
 
-# 🛠 Part VII: The Maintenance Workshop
+# ⚙️ Part VII: Configuration Architecture (The Hybrid System)
+
+The system utilizes a **Hybrid Configuration System** designed to bridge the gap between developer automation and user-friendly interaction. This system ensures that the project remains "Zero-Config" for beginners while providing "Zero-Interaction" capabilities for power users.
+
+### 1. The Logic Flow
+The configuration lifecycle follows a strict four-stage process before the backend is allowed to initialize:
+
+```mermaid
+graph TD
+    Start([Launch main.py]) --> Detect{Detect .env?}
+    Detect -->|No| Wizard[Launch Interactive Wizard]
+    Detect -->|Yes| Parse[Custom Dependency-Free Parse]
+    
+    Parse --> Consent{User Consents to .env?}
+    Consent -->|No| Wizard
+    Consent -->|Yes| Validate[Real-time Host & Model Probing]
+    
+    Validate -->|Failure| Error[Display Granular Error]
+    Error --> Wizard
+    
+    Validate -->|Success| Lockdown[Environment Lockdown]
+    Wizard --> Lockdown
+    
+    Lockdown --> API[Start FastAPI Server]
+```
+
+### 2. Stage A: Dependency-Free Detection
+To keep the project lean, the system does not rely on libraries like `python-dotenv`. Instead, `backend/startup.py` contains a custom parser that reads the key-value pairs directly. This ensures that the configuration system works even in environments where external package installation is restricted.
+
+### 3. Stage B: Real-time Validation (The "Probing" Phase)
+Unlike many systems that stay silent when given bad settings, our system performs two distinct health checks:
+- **Connectivity Probe**: It attempts a handshake with the Ollama Host (`RAG_MAIN_HOST`). If it cannot reach the IP/Port, it raises a `[CONNECTIVITY ERROR]`.
+- **Integrity Probe**: Even if the host is reachable, the specified model might not be pulled. The system queries the host's internal model list. If the model is missing, it raises an `[AVAILABILITY ERROR]`.
+
+### 4. Stage C: Environment Lockdown
+Once settings are confirmed (either via `.env` or Wizard), the system "locks" them into the operational environment using `os.environ`. 
+- **Atomic Consistency**: By writing to the process environment variables, every child module (from the Graph Orchestrator to the Embedder) pulls from a single source of truth without needing to pass config objects between functions.
+
+---
+
+# 🛰️ Part VIII: Component Specializations (Encyclopedias)
+
+For masters seeking the absolute limits of the system, we have created dedicated deep-dives for core components:
+
+*   **[API Server Master Encyclopedia](./API_Server_Guide.md)**: Details on SSE, Request-Response orchestration, and FastAPI status lifecycles.
+*   **[Unified Database Guide](./Unified_Database_Guide.md)**: Understanding the interplay between ChromaDB (Vectors) and SQLite (Persistence).
+*   **[Vector Database Deep-Dive](./Vector_Database_Encyclopedia.md)**: In-depth ChromaDB tuning and ingestion pipeline maps.
+*   **[Session & History Deep-Dive](./Session_History_Encyclopedia.md)**: SQLite schema details and message threading logic.
+
+---
+
+# 🛠 Part IX: The Maintenance Workshop
 
 A production system needs tools to keep it healthy.
 
@@ -246,9 +299,7 @@ Ever wonder why the AI gave a bad answer?
 
 ---
 
----
-
-# � Part VIII: Granular Module Analysis (Code Deep-Dive)
+# 🔬 Part X: Granular Module Analysis (Code Deep-Dive)
 
 To understand the system at a professional level, we must look at the specific files and how they implement the theories discussed above.
 
@@ -284,7 +335,7 @@ To understand the system at a professional level, we must look at the specific f
 
 ---
 
-# 💡 Part IX: Comparative Analysis (Why This Approach?)
+# 💡 Part XI: Comparative Analysis (Why This Approach?)
 
 | Feature | Standard RAG | IPR Platinum Sync (v1.7) |
 | :--- | :--- | :--- |

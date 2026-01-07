@@ -35,8 +35,11 @@ This guide is the definitive source for **Setting Up**, **Configuring**, and **O
 ```bash
 uv run main.py
 ```
-1.  **Interactive Wizard**: Select your Ollama host and specific models for **Chat** and **Embeddings**.
-2.  **Background Services**: Automatically starts the `Watchdog` and `Ingestion Worker` for real-time document indexing.
+The startup process uses a **Hybrid Configuration System**:
+
+1.  **Automated (.env)**: If a `.env` file exists (copy `.env.example` to create one), the system will verify the hosts and models. If valid, it skips the wizard for instant startup.
+2.  **Interactive Wizard**: If no `.env` is found (or if validation fails), the script launches a guided setup to select your Ollama host and specific models for **Chat** and **Embeddings**.
+3.  **Background Services**: Once configured, the system automatically starts the `Watchdog` and `Ingestion Worker` for real-time document indexing.
 
 ---
 

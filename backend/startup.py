@@ -35,6 +35,95 @@ def select_host(service_name: str) -> str:
             if url:
                 return url
 
+def validate_model_on_host(host: str, model_name: str, service_type: str) -> bool:
+    """Verifies if host is reachable and if model exists on it."""
+    try:
+        with console.status(f"[bold yellow]Validating {service_type} Config...[/bold yellow]", spinner="dots"):
+            client = ollama.Client(host=host)
+            # Step 1: Check Connectivity
+            try:
+                response = client.list()
+            except Exception as e:
+                console.print(f"[bold red]❌ [CONNECTIVITY ERROR][/bold red] "
+                              f"Failed to reach {service_type} host at [yellow]{host}[/yellow]")
+                console.print(f"[dim]Details: {e}[/dim]")
+                return False
+            
+            # Step 2: Check Model Existence
+            models = response.get('models', [])
+            model_names = [m['model'] for m in models]
+            
+            # Check for exact match or tag-less match
+            if model_name in model_names or any(m.startswith(f"{model_name}:") for m in model_names):
+                console.print(f"[bold green]✓[/bold green] {service_type} Config Verified: "
+                              f"[cyan]{model_name}[/cyan] found on [yellow]{host}[/yellow].")
+                return True
+            else:
+                console.print(f"[bold red]❌ [AVAILABILITY ERROR][/bold red] "
+                              f"Model [cyan]{model_name}[/cyan] not found on [yellow]{host}[/yellow].")
+                console.print(f"[dim]Available models on this host: {', '.join(model_names[:5])}{'...' if len(model_names) > 5 else ''}[/dim]")
+                return False
+                
+    except Exception as e:
+        console.print(f"[bold red]❌ Unexpected Validation Error:[/bold red] {e}")
+        return False
+
+def check_for_env_config() -> bool:
+    """Checks for .env file, shows values, prompts user, and VALIDATES if confirmed."""
+    import os
+    env_path = ".env"
+    
+    if not os.path.exists(env_path):
+        return False
+        
+    # Manual lightweight parsing to avoid dependency
+    env_vars = {}
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                env_vars[key.strip()] = val.strip().strip('"').strip("'")
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not read .env: {e}[/yellow]")
+        return False
+        
+    required_keys = ["RAG_MAIN_HOST", "RAG_MAIN_MODEL", "RAG_EMBED_HOST", "RAG_EMBED_MODEL"]
+    if all(k in env_vars for k in required_keys):
+        from rich.text import Text
+        console.print(Panel.fit("[bold green].env Configuration Detected[/bold green]", style="bold green"))
+        
+        # We manually construct text to avoid Rich interpreting colons in names as style tags
+        def print_var(label, value):
+            t = Text(label)
+            t.append(value, style="cyan")
+            console.print(t)
+
+        print_var("Main Host:  ", env_vars['RAG_MAIN_HOST'])
+        print_var("Main Model: ", env_vars['RAG_MAIN_MODEL'])
+        print_var("Embed Host: ", env_vars['RAG_EMBED_HOST'])
+        print_var("Embed Model:", env_vars['RAG_EMBED_MODEL'])
+        
+        if Confirm.ask("\nImport settings from .env and skip wizard?", default=True):
+            # NEW: Post-Confirmation Validation
+            main_ok = validate_model_on_host(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'], "Main (Chat)")
+            embed_ok = validate_model_on_host(env_vars['RAG_EMBED_HOST'], env_vars['RAG_EMBED_MODEL'], "Embedding (RAG)")
+            
+            if main_ok and embed_ok:
+                set_main_model(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'])
+                set_embedding_model(env_vars['RAG_EMBED_HOST'], env_vars['RAG_EMBED_MODEL'])
+                console.print("[bold green]Configuration Loaded from .env and Verified![/bold green]")
+                time.sleep(1) # Visual feedback
+                return True
+            else:
+                console.print("[bold yellow]\n⚠️ .env Validation failed. Falling back to Configuration Wizard...[/bold yellow]")
+                time.sleep(2)
+                return False
+            
+    return False
+
 def get_and_select_model(host: str, service_type: str) -> str:
     """Connects to host, lists models in a table, and asks for selection."""
     while True:
@@ -84,9 +173,29 @@ def get_and_select_model(host: str, service_type: str) -> str:
                 raise e
 
 def run_interactive_config():
+    # 0. Check for Hybrid .env Config
+    if check_for_env_config():
+        return
+
+    import os
     while True:
         console.clear()
-        console.print(Panel.fit("RAG Chat IPR - Configuration Wizard", style="bold blue"))
+        
+        console.print(Panel.fit("RAG Chat IPR - Configuration Wizard", style="bold blue", title="Setup"))
+
+        # Only show detailed example if .env doesn't exist
+        if not os.path.exists(".env"):
+             console.print("\n[bold yellow]Tip: Make a .env file for default/faster configuration set-up[/bold yellow]")
+             example_text = (
+                "# RAG Chat IPR - Configuration File\n\n"
+                "# 1. Main Chat Model (Inference)\n"
+                "RAG_MAIN_HOST=\"http://localhost:11434\"\n"
+                "RAG_MAIN_MODEL=\"llama3\"\n\n"
+                "# 2. RAG Embedding Model (Vectorization)\n"
+                "RAG_EMBED_HOST=\"http://localhost:11434\"\n"
+                "RAG_EMBED_MODEL=\"nomic-embed-text\""
+             )
+             console.print(Panel(example_text, title=".env Example", border_style="green", style="dim"))
         
         try:
             # 1. Main Model Configuration

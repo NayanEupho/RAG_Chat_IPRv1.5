@@ -49,3 +49,4 @@ The UI follows a **Glass-Aura** aesthetic:
 - **Missing @Files**: Ensure the files are present in the `upload_docs/` folder. The system auto-indexes new files in seconds.
 - **Slow Responses**: Heavy PDF parsing (100MB+) might cause a slight delay in the "Searching" status.
 - **History Mismatch**: If you switch models in the backend, use the **Refresh** or **Delete Session** button to sync the UI context.
+- **Config Persistence**: The system now remembers your backend host and model settings via the **Hybrid Configuration System**. Once set, you won't need to re-configure on every launch.
