@@ -27,10 +27,19 @@ export default function Sidebar({
     const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
     const router = useRouter();
 
+    // Dynamic API Base Detection
+    const getApiBase = () => {
+        if (typeof window !== 'undefined') {
+            const hostname = window.location.hostname;
+            return `http://${hostname}:8000/api`;
+        }
+        return 'http://localhost:8000/api';
+    };
+
     // Fetch sessions
     const fetchSessions = async () => {
         try {
-            const res = await fetch('http://localhost:8000/api/sessions');
+            const res = await fetch(`${getApiBase()}/sessions`);
             const data = await res.json();
             if (data && data.sessions) {
                 setSessions(data.sessions);
@@ -45,7 +54,7 @@ export default function Sidebar({
     // Fetch Config (Model Status)
     const fetchConfig = async () => {
         try {
-            const res = await fetch('http://localhost:8000/api/config');
+            const res = await fetch(`${getApiBase()}/config`);
             if (res.ok) {
                 const data = await res.json();
                 setConfig(data);
@@ -61,7 +70,7 @@ export default function Sidebar({
     // Check System Health
     const checkHealth = async () => {
         try {
-            const res = await fetch('http://localhost:8000/api/status');
+            const res = await fetch(`${getApiBase()}/status`);
             setSystemHealth(res.ok);
         } catch (err) {
             setSystemHealth(false);
@@ -70,7 +79,7 @@ export default function Sidebar({
 
     const handleCreateSession = async (title: string) => {
         try {
-            const res = await fetch('http://localhost:8000/api/sessions', {
+            const res = await fetch(`${getApiBase()}/sessions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ title: title || 'New Conversation' })
@@ -93,7 +102,7 @@ export default function Sidebar({
         if (!confirm("Delete this session?")) return;
 
         try {
-            await fetch(`http://localhost:8000/api/sessions/${id}`, { method: 'DELETE' });
+            await fetch(`${getApiBase()}/sessions/${id}`, { method: 'DELETE' });
             setSessions(prev => prev.filter(s => s.session_id !== id));
             if (currentSessionId === id) {
                 // If deleted active session, go to root
