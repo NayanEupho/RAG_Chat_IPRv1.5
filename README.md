@@ -1,4 +1,4 @@
-# IPR RAG Chat v1.7 (Platinum Sync Edition)
+# IPR RAG Chat v1.5
 
 A production-grade, modular, and agentic RAG (Retrieval-Augmented Generation) system. Built with **FastAPI**, **LangGraph**, **Ollama**, **Docling**, and **Next.js**.
 

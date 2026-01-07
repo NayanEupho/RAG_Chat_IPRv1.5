@@ -1,94 +1,143 @@
-# API Server Guide (Platinum Edition)
+# API Server Master Encyclopedia: Architectural Deep-Dive (FastAPI Edition)
 
-The Backend is built with **FastAPI**, creating a high-performance, asynchronous REST API.
-
-## Base URL
-`http://localhost:8000`
+This encyclopedia provides the absolute technical "Source of Truth" for the **RAG Chat IPR API Server**. It covers the architecture from the very foundations of the FastAPI lifecycle to the complex orchestration of asynchronous LangGraph nodes and SSE (Server-Sent Events) streaming.
 
 ---
 
-## 🛠 Active Endpoints
+## 🏛 1. Foundational Architecture
 
-### 1. Unified Streaming Chat
-**POST** `/api/chat/stream`
+The backend is built on **FastAPI**, an ultra-modern, high-performance web framework for building APIs with Python 3.10+ based on standard Python type hints.
 
-Returns a Server-Sent Events (SSE) stream with real-time intent updates.
+### The Tech Stack
+*   **Web Framework**: FastAPI (Asynchronous ASGI).
+*   **ASGI Server**: Uvicorn (The lightning-fast worker).
+*   **Protocol**: REST (for state) + SSE (Server-Sent Events) for real-time streaming.
+*   **Concurrency**: 100% Asynchronous (`async`/`await`) to prevent blocking during heavy AI inference.
 
-**Request Body:**
-```json
-{
-  "message": "Compare @file1.pdf and @file2.pdf",
-  "session_id": "sid_123456",
-  "mode": "auto" 
-}
+---
+
+## 🔄 2. The Server Lifecycle (Lifespan Management)
+
+Unlike simple scripts, the API server has a "Lifecycle." It doesn't just start; it *initializes* resources and *cleans up* on exit.
+
+### Implementation Detail (`app.py`):
+We use the **`@asynccontextmanager`** pattern to manage the server's lifespan.
+
+```mermaid
+graph LR
+    Start([Uvicorn Start]) --> Config[Load AppConfig Singleton]
+    Config --> Watchdog[Initialize WatchdogService]
+    Watchdog --> Running[API Ready & Listening]
+    Running --> Stop([Uvicorn Shutdown])
+    Stop --> Cleanup[Stop Watchdog & Close DB Connections]
 ```
-*   **mode**: `auto` (Smart Routing), `rag` (Force Knowledge Base), or `chat` (Force Pure LLM).
 
-**SSE Event Types:**
-- `event: status`: Real-time steps (e.g., "Analyzing Intent", "Searching Documents...").
-- `event: token`: Decoded JSON string of the next answer token.
-- `event: end`: Final JSON payload containing:
-  - `intent`: (chat, direct_rag, specific_doc_rag)
-  - `sources`: Deduplicated context snippets (formatted as `Source: Name \nContent: text`).
-  - `targeted_docs`: List of files extracted from @mentions.
+**Why this matters**: This ensures that if you add a PDF while the server is starting, the `WatchdogService` is already "awake" and ready to index it.
 
 ---
 
-### 2. Knowledge Base Status
-**GET** `/api/documents`
+## 🛰 3. Request-Response Lifecycle: The "SSE Handshake"
 
-Returns a list of all unique filenames currently stored in the vector store.
+The most advanced part of the server is the **Streaming Chat Endpoint** (`/api/chat/stream`). It transforms a standard HTTP request into a persistent neural pipeline.
 
----
+### The Logic Sequence:
 
-### 3. Intelligence Configuration
-**GET** `/api/config`
+1.  **Entry**: The frontend sends a JSON payload (Message + SessionID + Mode).
+2.  **Session Priming**: The server checks **SQLite** (`history.py`) to create the session if it's new.
+3.  **The SSE Generator**:
+    -   FastAPI returns a `StreamingResponse`.
+    -   The server starts a background `sse_generator()`.
+    -   **LangGraph Invoke**: The generator calls the AI workflow.
+    -   **Event Interception**: As LangGraph nodes execute (Router -> Retriever -> Generator), the server "catches" events and yields them as `event: status`.
+    -   **Token Yielding**: When the LLM starts speaking, the server catches `on_chat_model_stream` events and yields `event: token`.
 
-Returns the current runtime models and hosts for both the Main Model and Embedding Model.
-
----
-
-### 4. Session & Persistent Memory
-**GET** `/api/sessions`
-- Lists all active chat sessions with titles and last active timestamps.
-
-**DELETE** `/api/sessions/{session_id}`
-- Permanently wipes a session and its associated checkpointer data.
-
-**GET** `/api/history/{session_id}`
-- Returns the complete interaction history.
-- **New Schema**: Messages now include a `thoughts` array for rendering the "Thinking Process" timeline in the UI.
-
----
-
-## 🛰 Internal Sequence & Data Flow
-
-### SSE Stream Orchestration
+### Visual Process Map:
 ```mermaid
 sequenceDiagram
-    participant Client as Web UI
-    participant API as FastAPI Gateway
-    participant Graph as LangGraph Engine
-    participant LLM as Ollama Inference
-
-    Client->>API: POST /chat/stream
-    API->>Graph: Initialize with Session Context
+    participant UI as Next.js Frontend
+    participant API as FastAPI (routes.py)
+    participant LG as LangGraph Orchestrator
+    participant OLL as Ollama (Inference)
+    participant SEC as SQLite (History)
     
-    loop Lifecycle Events
-        Graph->>API: Status (Router/Retriever)
-        API-->>Client: event: status
+    UI->>API: POST /api/chat/stream
+    activate API
+    API->>SEC: create_session() & log_user_message()
+    API->>LG: astream_events(inputs, mode)
+    
+    loop Neural Workflow
+        LG->>API: Node Started (e.g., retriever)
+        API-->>UI: event: status ("Searching Documents...")
         
-        Graph->>LLM: Stream Content
-        LLM-->>API: Tokens
-        API-->>Client: event: token
+        LG->>OLL: Generate Response
+        OLL-->>LG: Token Chunks
+        LG-->>API: Stream Event
+        API-->>UI: event: token ("The...")
     end
-
-    Graph->>API: Final State (Sources + Intent)
-    API->>DB: Save to History + Metadata
-    API-->>Client: event: end
+    
+    LG->>API: Final State (Sources, Intent)
+    API->>SEC: log_bot_response(full_text, sources, thoughts)
+    API-->>UI: event: end (Metadata JSON)
+    deactivate API
 ```
 
-### Data Storage Strategy
-We utilize **SQLite** with a dual-role approach:
-1.  **LangGraph Checkpointer**: Stores the raw binary state of the agent's brain (allows for complex backtracking).
-2.  **Custom History Table**: Stores human-readable messages with JSON-serialized metadata for immediate UI consumption.
+---
+
+## 🛠 4. Service Integration & Orchestration
+
+The API Server acts as the **"Grand Central Station"** for the project. It connects these four decoupled services:
+
+### A. The Configuration Guardian (`config.py`)
+- **Role**: The single source of truth for your Ollama hosts and model names.
+- **Implementation**: A Singleton class that the API checks at every request to ensure the models haven't changed.
+
+### B. The History Engine (`history.py`)
+- **Role**: Manages the SQLite persistent memory.
+- **Implementation**: The API uses thread-safe connections to log messages *asynchronously* while the stream is still running.
+
+### C. The Neural Graph (`workflow.py`)
+- **Role**: The "Brain" that decides how to handle the query.
+- **Implementation**: The API compiles the LangGraph once and invokes it with a `thread_id` (the session ID) to maintain "Long-term" state.
+
+### D. The Vector Store (`store.py`)
+- **Role**: Knowledge retrieval.
+- **Implementation**: The API provides a `/api/documents` endpoint to let the frontend know which files are currently indexed.
+
+---
+
+## 🚀 5. Advanced Implementation Details
+
+### Dynamic CORS (Cross-Origin Resource Sharing)
+To ensure the frontend can talk to the backend even from different IP addresses (as addressed in Phase 20), we implement dynamic CORS middleware:
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In development, permits all local network IPs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### JSON Tokenization
+When streaming tokens, we use `json.dumps()` on every token before sending. 
+**Why?** This ensures that special characters (like newlines or quotes) don't break the SSE protocol, which relies on specific line formatting.
+
+### Metadata Post-Processing
+After the AI finishes talking, the server performs a **Deduplication Pass** on the sources. If the AI retrieved 10 chunks from the same PDF, the API server groups them into a single "Source" object for the UI to display cleanly.
+
+---
+
+## 📊 6. Endpoint Encyclopedia (Technical Spec)
+
+| Endpoint | Method | Payload | Function |
+| :--- | :--- | :--- | :--- |
+| `/api/chat/stream` | POST | `ChatRequest` | Real-time AI inference & SSE orchestration. |
+| `/api/sessions` | GET | None | Retrieval of all active conversation metadata. |
+| `/api/history/{id}` | GET | None | Restoration of full chat logs + AI Thought Process. |
+| `/api/documents` | GET | None | Real-time inventory of the Vector Database. |
+| `/api/config` | GET | None | Verification of current Ollama/AI settings. |
+
+---
+
+✅ **API Server Status**: *Robust, Scalable, and Production-Grade.*

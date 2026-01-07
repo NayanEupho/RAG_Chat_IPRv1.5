@@ -1,7 +1,7 @@
 [project]
 name = "rag-chat-iprv1-5"
 version = "0.1.0"
-description = "Add your description here"
+description = "Bridging Document Intelligence and Agentic Reasoning — Completely Local, Completely Private."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
