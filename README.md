@@ -72,6 +72,10 @@ uv run main.py
 # 2. Start Frontend
 cd frontend
 bun install && bun dev
+
+# 💡 Production Tip
+# Never use 'bun dev' for long-term deployment.
+# Run 'bun run build' followed by 'bun run start' for SOTA performance.
 ```
 
 Visit **http://localhost:3000** to enter the Command Center.

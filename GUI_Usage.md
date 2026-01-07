@@ -39,6 +39,30 @@ When retrieval occurs, interactive source cards appear at the top of the AI's re
 - **Session Cleanup**: Use the **Trash Icon** in the sidebar to permanently delete conversations.
 - **Knowledge Viewer**: Click the **Database Icon** to see a grid view of all indexed files.
 
+---
+
+## 🚀 Frontend Deployment Commands
+
+For a stable, high-performance experience, use the production workflow instead of the development server.
+
+### 1. Command Summary
+| Environment | Action | Command |
+| :--- | :--- | :--- |
+| **Development** | Start Dev Server | `bun dev` |
+| **Production** | Build Application | `bun run build` |
+| **Production** | Serve Build | `bun run start` |
+
+### 2. The Production Workflow
+Follow these steps when moving the UI to a production or shared network environment:
+1.  **Build Phase**: Run `bun run build` in the `frontend/` directory. This creates a highly optimized `.next` folder.
+2.  **Start Phase**: Run `bun run start`. This server is optimized for high concurrency and low memory usage.
+3.  **Persistence**: (Recommended) Use a process manager like **PM2** to keep the frontend alive:
+    ```bash
+    pm2 start "bun run start" --name "rag-gui"
+    ```
+
+---
+
 ## 🎨 Design Philosophy
 The UI follows a **Glass-Aura** aesthetic:
 - **Depth**: Multi-layered transparency with backdrop blurring.

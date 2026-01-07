@@ -217,6 +217,20 @@ Standard APIs wait for the *whole* answer before showing it. We use **SSE**:
 4.  Frontend React Hook updates the message immediately.
 - **Benefit**: Even if a full answer takes 10 seconds, the user sees the first word in 200ms.
 
+### 3. Production vs. Development Workflow
+The Next.js frontend is designed with two distinct operational modes:
+
+| Feature | Development (`bun dev`) | Production (`build` & `start`) |
+| :--- | :--- | :--- |
+| **Optimization** | None (JIT Compilation) | Fully Minified & Tree-Shaken |
+| **Speed** | Moderate (Fast Refresh enabled) | Maximum (Static Analysis optimized) |
+| **Security** | Verbose (Source maps exposed) | Hardened (Obfuscated assets) |
+| **Stability** | Diagnostic (Heavy memory use) | Resilient (Lean runtime) |
+
+**The Production Lifecycle**:
+1.  **`bun run build`**: Analyzes the dependency graph, triggers CSS minification, and pre-renders static routes into the `.next` directory.
+2.  **`bun run start`**: Launches the optimized Node.js runtime to serve the pre-built assets, ensuring zero-latency transitions for end-users.
+
 ---
 
 # 🛡 Part VI: Security, Privacy & Performance
