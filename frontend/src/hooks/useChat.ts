@@ -88,15 +88,13 @@ export function useChat() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // Add User Message
+    // Add User Message AND Placeholder Bot Message in a single atomic update
+    // This prevents React's async state batching from causing incorrect ordering
     const userMsg: Interaction = { role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
+    const botPlaceholder: Interaction = { role: 'bot', content: '', status: 'Thinking...', thoughts: [] };
+    setMessages(prev => [...prev, userMsg, botPlaceholder]);
     setLoading(true);
     setCurrentStatus('Thinking...');
-
-    // Add Placeholder Bot Message
-    const botMsgIndex = messages.length + 1;
-    setMessages(prev => [...prev, { role: 'bot', content: '', status: 'Thinking...' }]);
 
     try {
       const response = await fetch(`${getApiBase()}/chat/stream`, {

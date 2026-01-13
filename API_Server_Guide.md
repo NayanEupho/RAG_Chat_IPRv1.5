@@ -126,6 +126,12 @@ When streaming tokens, we use `json.dumps()` on every token before sending.
 ### Metadata Post-Processing
 After the AI finishes talking, the server performs a **Deduplication Pass** on the sources. If the AI retrieved 10 chunks from the same PDF, the API server groups them into a single "Source" object for the UI to display cleanly.
 
+### Real-time Probing `/api/status`
+The server exposes an "active" status endpoint that goes beyond static config.
+- **Verification**: It makes a real-time HTTP call to the configured Ollama host.
+- **Model Check**: It parses the host's `/api/tags` and confirms that the *exact* model string configured is actually pulled and ready.
+- **Granular Payload**: Returns `main_model_healthy` and `embed_model_healthy` booleans, allowing the frontend to show specific "Disconnected" states for each component without crashing the whole session.
+
 ---
 
 ## 📊 6. Endpoint Encyclopedia (Technical Spec)
@@ -137,6 +143,7 @@ After the AI finishes talking, the server performs a **Deduplication Pass** on t
 | `/api/history/{id}` | GET | None | Restoration of full chat logs + AI Thought Process. |
 | `/api/documents` | GET | None | Real-time inventory of the Vector Database. |
 | `/api/config` | GET | None | Verification of current Ollama/AI settings. |
+| `/api/status` | GET | None | **Live Health Probing**: Verifies host connectivity and model availability. |
 
 ---
 

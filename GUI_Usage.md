@@ -74,3 +74,4 @@ The UI follows a **Glass-Aura** aesthetic:
 - **Slow Responses**: Heavy PDF parsing (100MB+) might cause a slight delay in the "Searching" status.
 - **History Mismatch**: If you switch models in the backend, use the **Refresh** or **Delete Session** button to sync the UI context.
 - **Config Persistence**: The system now remembers your backend host and model settings via the **Hybrid Configuration System**. Once set, you won't need to re-configure on every launch.
+- **Model Red Indicators**: If a model dot turns red, it means either the host is unreachable or the specific model isn't pulled in Ollama. Check `backend/startup.py` or run `ollama list` to verify.

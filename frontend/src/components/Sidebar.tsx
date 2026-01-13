@@ -22,6 +22,8 @@ export default function Sidebar({
     const [sessions, setSessions] = useState<Session[]>([]);
     const [config, setConfig] = useState<any>(null);
     const [systemHealth, setSystemHealth] = useState<boolean>(false);
+    const [mainModelHealthy, setMainModelHealthy] = useState<boolean>(false);
+    const [embedModelHealthy, setEmbedModelHealthy] = useState<boolean>(false);
     const [isOpen, setIsOpen] = useState(true);
     const [mounted, setMounted] = useState(false);
     const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
@@ -67,12 +69,25 @@ export default function Sidebar({
         }
     }
 
-    // Check System Health
+    // Check System Health (granular per-model check)
     const checkHealth = async () => {
         try {
             const res = await fetch(`${getApiBase()}/status`);
-            setSystemHealth(res.ok);
+            if (res.ok) {
+                const data = await res.json();
+                // Granular model health from new API
+                setMainModelHealthy(data.main_model_healthy === true);
+                setEmbedModelHealthy(data.embed_model_healthy === true);
+                // Overall system health is "ok" only if both are healthy
+                setSystemHealth(data.status === 'ok');
+            } else {
+                setMainModelHealthy(false);
+                setEmbedModelHealthy(false);
+                setSystemHealth(false);
+            }
         } catch (err) {
+            setMainModelHealthy(false);
+            setEmbedModelHealthy(false);
             setSystemHealth(false);
         }
     }
@@ -217,8 +232,8 @@ export default function Sidebar({
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.8rem', color: 'var(--fg-secondary)' }}>
                                 <div style={{
                                     width: '8px', height: '8px', borderRadius: '50%',
-                                    backgroundColor: (config && config.main_model && systemHealth) ? 'var(--accent-secondary)' : 'var(--accent-error)',
-                                    boxShadow: (config && config.main_model && systemHealth) ? '0 0 5px var(--accent-secondary)' : 'none',
+                                    backgroundColor: mainModelHealthy ? 'var(--accent-secondary)' : 'var(--accent-error)',
+                                    boxShadow: mainModelHealthy ? '0 0 5px var(--accent-secondary)' : 'none',
                                     transition: 'background-color 0.3s'
                                 }}></div>
                                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
@@ -231,8 +246,8 @@ export default function Sidebar({
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.8rem', color: 'var(--fg-secondary)' }}>
                                 <div style={{
                                     width: '8px', height: '8px', borderRadius: '50%',
-                                    backgroundColor: (config && config.embed_model && systemHealth) ? 'var(--accent-secondary)' : 'var(--accent-error)',
-                                    boxShadow: (config && config.embed_model && systemHealth) ? '0 0 5px var(--accent-secondary)' : 'none',
+                                    backgroundColor: embedModelHealthy ? 'var(--accent-secondary)' : 'var(--accent-error)',
+                                    boxShadow: embedModelHealthy ? '0 0 5px var(--accent-secondary)' : 'none',
                                     transition: 'background-color 0.3s'
                                 }}></div>
                                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>

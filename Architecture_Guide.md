@@ -216,6 +216,7 @@ Standard APIs wait for the *whole* answer before showing it. We use **SSE**:
 3.  Backend pushes `data: Hello`, then `data: World`.
 4.  Frontend React Hook updates the message immediately.
 - **Benefit**: Even if a full answer takes 10 seconds, the user sees the first word in 200ms.
+- **Stability Fix**: The system uses **Atomic State Updates** to ensure that user messages and bot placeholders are rendered in a guaranteed sequence, preventing "race conditions" where the response might appear above the query.
 
 ### 3. Production vs. Development Workflow
 The Next.js frontend is designed with two distinct operational modes:
@@ -272,6 +273,8 @@ graph TD
     Wizard --> Lockdown
     
     Lockdown --> API[Start FastAPI Server]
+    API --> Health[Continuous Runtime Probing]
+    Health --> Health
 ```
 
 ### 2. Stage A: Dependency-Free Detection
@@ -282,7 +285,12 @@ Unlike many systems that stay silent when given bad settings, our system perform
 - **Connectivity Probe**: It attempts a handshake with the Ollama Host (`RAG_MAIN_HOST`). If it cannot reach the IP/Port, it raises a `[CONNECTIVITY ERROR]`.
 - **Integrity Probe**: Even if the host is reachable, the specified model might not be pulled. The system queries the host's internal model list. If the model is missing, it raises an `[AVAILABILITY ERROR]`.
 
-### 4. Stage C: Environment Lockdown
+### 4. Stage C: Continuous Runtime Health
+Configuration isn't just checked at startup. The system provides an `/api/status` endpoint that performs **Active Probing** every few seconds:
+- **Granular Reporting**: The system reports health for the **Main Model** and **Embedding Model** independently, supporting split-host architectures.
+- **Silent Recovery**: If a host goes offline briefly, the UI reflects the "Offline" state immediately via red indicators, preventing users from sending queries that would crash or timeout.
+
+### 5. Stage D: Environment Lockdown
 Once settings are confirmed (either via `.env` or Wizard), the system "locks" them into the operational environment using `os.environ`. 
 - **Atomic Consistency**: By writing to the process environment variables, every child module (from the Graph Orchestrator to the Embedder) pulls from a single source of truth without needing to pass config objects between functions.
 
@@ -345,7 +353,8 @@ To understand the system at a professional level, we must look at the specific f
 ## 5. The SSE Consumer (`frontend/src/hooks/useChat.ts`)
 - **Role**: The brain of the React UI.
 - **The "How"**: It uses the `fetch` API with a custom reader.
-- **State Logic**: It maintains an array of `messages`. When a new token arrives, it updates only the *last* message in the array. This creates the "Typing" effect without re-rendering the whole screen (Performance Optimization).
+- **Atomic State Logic**: To prevent the "Message Flip" bug (where responses appear above queries), it uses a single, atomic `setMessages` call when a user sends a message. This ensures the React state reconciler preserves the chronological order of the conversation history.
+- **Token Handling**: When a new token arrives, it updates only the *last* message in the array. This creates the "Typing" effect without re-rendering the whole screen (Performance Optimization).
 
 ---
 

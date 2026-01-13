@@ -220,7 +220,76 @@ def get_config_route():
 
 @router.get("/status")
 def status():
-    return {"status": "ok", "graph": "compiled"}
+    """
+    Real-time health check for Ollama hosts and model availability.
+    Supports split-host configurations where main and embedding models run on different Ollama instances.
+    """
+    import httpx
+    from backend.config import get_config
+    
+    def check_model_health(host: str, model_name: str) -> dict:
+        """Check if a specific model is available on a given Ollama host."""
+        result = {"healthy": False, "error": None}
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                response = client.get(f"{host}/api/tags")
+                if response.status_code == 200:
+                    data = response.json()
+                    models = data.get("models", [])
+                    # Check if model_name is in the list (strip version tags for comparison)
+                    model_names = [m.get("name", "").split(":")[0] for m in models]
+                    model_base = model_name.split(":")[0]
+                    
+                    if model_base in model_names or model_name in [m.get("name", "") for m in models]:
+                        result["healthy"] = True
+                    else:
+                        result["error"] = f"Model '{model_name}' not found on host"
+                else:
+                    result["error"] = f"Host returned status {response.status_code}"
+        except httpx.ConnectError:
+            result["error"] = "Cannot connect to Ollama host"
+        except httpx.TimeoutException:
+            result["error"] = "Connection timed out"
+        except Exception as e:
+            result["error"] = str(e)
+        return result
+    
+    try:
+        cfg = get_config()
+        
+        # Check Main Model
+        main_result = {"healthy": False, "error": "Not configured"}
+        if cfg.main_model:
+            main_result = check_model_health(cfg.main_model.host, cfg.main_model.model_name)
+        
+        # Check Embedding Model
+        embed_result = {"healthy": False, "error": "Not configured"}
+        if cfg.embedding_model:
+            embed_result = check_model_health(cfg.embedding_model.host, cfg.embedding_model.model_name)
+        
+        # Determine overall status
+        if main_result["healthy"] and embed_result["healthy"]:
+            overall_status = "ok"
+        elif main_result["healthy"] or embed_result["healthy"]:
+            overall_status = "degraded"
+        else:
+            overall_status = "offline"
+        
+        return {
+            "status": overall_status,
+            "main_model_healthy": main_result["healthy"],
+            "main_model_error": main_result["error"],
+            "embed_model_healthy": embed_result["healthy"],
+            "embed_model_error": embed_result["error"]
+        }
+    except Exception as e:
+        return {
+            "status": "offline",
+            "main_model_healthy": False,
+            "main_model_error": str(e),
+            "embed_model_healthy": False,
+            "embed_model_error": str(e)
+        }
 
 @router.get("/documents")
 def get_documents():

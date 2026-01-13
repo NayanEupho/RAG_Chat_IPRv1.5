@@ -43,6 +43,7 @@ graph TD
     *   **[`rebuild_knowledge_base.py`](./rebuild_knowledge_base.py)**: Total DB reset with high-fidelity progress tracking.
     *   **[`kb_debug.py`](./kb_debug.py)**: Semantic probing and inventory monitoring.
 *   **📑 Hierarchical RAG**: Section-aware chunking preserves the relationship between headers and body text for surgical accuracy.
+*   **🩺 Proactive Health Probing**: Real-time monitoring of Ollama hosts and model availability ensures zero-latency failure detection.
 *   **💎 Premium Glassmorphic UI**: High-speed interface featuring live thinking states, source-strip transparency, and buttery animations.
 
 ## 🛠 Tech Stack

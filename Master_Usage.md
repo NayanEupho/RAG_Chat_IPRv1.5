@@ -87,5 +87,5 @@ python kb_debug.py --probe "your search query"
 
 ## ❓ Troubleshooting
 - **Network Error**: Ensure Ollama is running and the host selected in the wizard is reachable.
-- **Low Accuracy**: Use the `--probe` command in `kb_debug.py` to verify if your documents are being retrieved correctly.
+- **Red Status Indicators**: A red dot in the sidebar ("AI Model Config") means the specific model is either offline or its name is not found on the host. Run `ollama list` on the host to verify.
 - **Session Reset**: Use the **Trash Icon** in the sidebar to permanently delete a session and reset the agent's memory.

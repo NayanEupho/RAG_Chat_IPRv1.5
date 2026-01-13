@@ -104,6 +104,7 @@ UPDATE sessions SET title = 'New Title' WHERE session_id = 'id';
 
 - **WAL Mode (Write-Ahead Logging)**: Enabled by default in modern SQLite wrappers for better performance.
 -   **Automatic Migrations**: `history.py` includes "Lazy Migration" logic that checks if columns like `thoughts` or `metadata` exist and adds them automatically if missing. This means your data is **future-proof**.
+- **UI-Sync Stability**: The frontend uses **Atomic State Logic** during message submission, ensuring that the chronological record in the UI always matches the primary key sequence (ID) in the `messages` table, preventing "state drift" during high-concurrency streaming.
 
 ---
 
