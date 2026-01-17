@@ -1,6 +1,6 @@
-# Master Usage Guide (Platinum Sync)
+# Master Usage Guide (v1.5)
 
-This guide is the definitive source for **Setting Up**, **Configuring**, and **Operating** the **IPR RAG Chat v1.7** system.
+This guide is the definitive source for **Setting Up**, **Configuring**, and **Operating** the **IPR RAG Chat v1.5** system.
 
 ---
 

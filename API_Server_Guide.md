@@ -48,7 +48,7 @@ The most advanced part of the server is the **Streaming Chat Endpoint** (`/api/c
     -   FastAPI returns a `StreamingResponse`.
     -   The server starts a background `sse_generator()`.
     -   **LangGraph Invoke**: The generator calls the AI workflow.
-    -   **Event Interception**: As LangGraph nodes execute (Router -> Retriever -> Generator), the server "catches" events and yields them as `event: status`.
+    -   **Event Interception**: As LangGraph nodes execute (Router/Planner -> Retriever -> Generator), the server "catches" events and yields them as `event: status`.
     -   **Token Yielding**: When the LLM starts speaking, the server catches `on_chat_model_stream` events and yields `event: token`.
 
 ### Visual Process Map:

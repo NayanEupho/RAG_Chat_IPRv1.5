@@ -60,6 +60,10 @@ async def generate_sub_queries(query: str) -> list[str]:
         content = response.content.strip()
         sub_queries = [line.strip().replace("- ", "") for line in content.split("\n") if line.strip()]
         
+        # Fallback if LLM outputs nothing valid
+        if not sub_queries:
+             sub_queries = [query]
+        
         # Always include original query
         if query not in sub_queries:
             sub_queries.insert(0, query)
@@ -88,8 +92,16 @@ async def retrieve_documents(state: AgentState):
     queries_to_run = [query]
     
     # Use multi-query for BOTH general RAG and specific file targeting
-    # This ensures "High Accuracy" even if the user uses synonyms ("stack" vs "libs") on a specific file.
-    if intent in ["direct_rag", "specific_doc_rag"]:
+    # CHECK: If we already have semantic_queries (from Planner or Rewriter), we SKIP generation
+    semantic_maps = state.get('semantic_queries', [])
+    
+    if semantic_maps:
+        logger.info(f"[RETRIEVER] Using {len(semantic_maps)} pre-planned semantic queries.")
+        # We don't need to run generate_sub_queries here because we will iterate over semantic_maps later
+        # However, for the "Global Fallback" (Safety Net) below, we might still want a base list of strings.
+        queries_to_run = [s['query'] for s in semantic_maps]
+        
+    elif intent in ["direct_rag", "specific_doc_rag"]:
         logger.info("[RETRIEVER] Generating sub-queries for better recall...")
         expanded_queries = await generate_sub_queries(query)
         queries_to_run = expanded_queries

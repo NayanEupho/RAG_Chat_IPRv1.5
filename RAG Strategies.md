@@ -1,7 +1,7 @@
 # Advanced RAG Strategies - Complete Guide
 
 > [!IMPORTANT]
-> **IPR RAG Chat v1.7 (Platinum Sync)** implements these elite strategies natively:
+> **IPR RAG Chat v1.5** implements these elite strategies natively:
 > - **Agentic Graph Routing**: Intelligent intent detection via LangGraph.
 > - **Hierarchical RAG**: Section-aware chunking (Docling + Heading Tags).
 > - **Two-Stage Retrieval**: Vector Search + FlashRank Cross-Encoder Re-ranking.
@@ -227,7 +227,10 @@ async def search_with_reranking(ctx: RunContext[None], query: str, limit: int = 
 **Files**: `rag_agent_advanced.py` (Lines 263-354)
 
 ### What It Is
-Agent autonomously chooses between multiple retrieval tools, example:
+Agent autonomously chooses between multiple retrieval tools.
+**Evolution (v1.5)**: We now support **Fused Planning**. Instead of a multi-step "Router -> Tool" chain, a large model (70B+) generates the entire retrieval plan (intent + queries + targets) in a single dense token stream.
+
+### Example:
 1. `search_knowledge_base()` - Semantic search over chunks (can include **hybrid search**: dense vector + sparse keyword/BM25)
 2. `retrieve_full_document()` - Pull entire documents when chunks aren't enough
 

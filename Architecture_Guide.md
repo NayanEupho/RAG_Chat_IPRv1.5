@@ -1,4 +1,4 @@
-# 🧠 The Definitive Architecture Encyclopedia (v1.7)
+# 🧠 The Definitive Architecture Encyclopedia (v1.5)
 ## IPR RAG Chat: From Silicon to Synthesis
 
 Welcome to the **Master Architecture Guide**. This document is designed to take you from a curious beginner to a master of the **IPR RAG Chat** system. We will explore every gear, every line of logic, and every architectural decision that makes this system a state-of-the-art (SOTA) agentic assistant.
@@ -115,42 +115,49 @@ This is the most complex part of the system. We have mapped the path from "User 
 
 ```mermaid
 graph TD
-    User([User Query]) --> Router{Router Node}
+    User([User Query]) --> Config{Fused/Modular?}
     
-    subgraph "Level 0: The Gatekeeper"
+    subgraph "Fused Mode (Speed)"
+        Config --> |Fused| Planner[Planner Node]
+        Planner --> |Plan: RAG| Retriever[Retriever Node]
+        Planner --> |Plan: Chat| Generator
+    end
+    
+    subgraph "Modular Mode (Legacy/Small Models)"
+        Config --> |Modular| Router{Router Node}
         Router --> |Fast-Path| Heuristic[Keyword Matcher]
-        Heuristics -- "Mode Forced?" --> Decision
+        Heuristic --> |Ambiguous| VectorCheck
+        
+        Router --> |RAG| Rewriter[Rewriter Node]
+        Rewriter --> Retriever
+        Router --> |Chat| Generator
     end
 
-    subgraph "Level 1: Semantic Mapping"
-        Router -- "Auto/RAG" --> Rewriter[Query Rewriter]
-        Rewriter --> |Segment 1| Query1[Target: File A]
-        Rewriter --> |Segment 2| Query2[Target: Global]
-    end
-
-    subgraph "Level 2: Context Retrieval"
-        Query1 & Query2 --> Retriever[Retriever Node]
-        Retriever --> Window[Contextual Expansion]
-        Window --> Rerank[FlashRank Node]
-    end
-
-    subgraph "Level 3: Synthesis"
-        Rerank --> |Top 5| Generator[Adaptive Generator]
-        Decision --> Generator
-        Generator --> SSE[SSE Response Stream]
-    end
+    Retriever --> Window[Contextual Expansion]
+    Window --> Rerank[FlashRank Helper]
+    Rerank --> Generator[Adaptive Generator]
+    Generator --> SSE[SSE Response Stream]
 ```
 
-### 1. The Router: The Gatekeeper
+### 1a. The planner (Fused Mode - The "Brain")
+In **Fused Mode** (Default for 70B+ models), we skip the "Router -> Rewriter" chain.
+The **Planner** does it all in **one shot**:
+- **Analyzes Intent**: Chat vs RAG.
+- **Rewrites Query**: Adds context.
+- **Plans Search**: Generates sub-queries.
+- **Benefit**: **60% Reduction in Latency**.
+
+### 1b. The Router (Modular Mode - The "Gatekeeper")
+In **Modular Mode** (For 7B models), we split the work.
 The router doesn't just run LLM calls. It's smarter:
 - **Regex Check**: It instantly detects `@mentions` (Zero Latency).
-- **Heuristic Check**: It looks for words like "hello", "thanks", "who are you" (Zero Latency).
-- **Vector Check**: It checks if the query is even related to your knowledge base. If not, it skips the RAG process entirely to save power.
+- **Heuristic Check**: It looks for words like "hello" (Zero Latency).
+- **Vector Check**: Checks knowledge base relevance.
 
-### 2. The Rewriter: The Semantic Segmenter
-If you ask *"What does the Policy say about sick leave?"*, the rewriter turns it into:
-- `["sick leave policies", "employee absences", "medical leave benefits"]`
-This "Query Expansion" ensures that even if you use different words than the document, the system still finds it.
+### 2. The Rewriter (Modular Mode - The "Segmenter")
+Only used in Modular Mode. If you ask *"What does the Policy say?"*, it turns it into:
+- `["sick leave policies", "employee absences"]`
+This step ensures small models don't get overwhelmed by doing planning + rewriting at the same time.
 
 ### 3. The Retriever: The Context Window
 Most RAG systems retrieve a small snippet. We use **Neighbor-Window Retrieval**:
@@ -414,7 +421,7 @@ To understand the system at a professional level, we must look at the specific f
 
 # 💡 Part XII: Comparative Analysis (Why This Approach?)
 
-| Feature | Standard RAG | IPR Platinum Sync (v1.7) |
+| Feature | Standard RAG | IPR RAG Chat (v1.5) |
 | :--- | :--- | :--- |
 | **Logic** | Linear (A -> B) | Agentic (Cyclic/Graph) |
 | **Parsing** | Naive Split | Layout-Aware (Docling) |

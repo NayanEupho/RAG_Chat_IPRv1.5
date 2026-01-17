@@ -1,4 +1,4 @@
-# 🧠 LangGraph Deep-Dive: The "Neural" Core of IPR RAG Chat v1.7
+# 🧠 LangGraph Deep-Dive: The "Neural" Core of IPR RAG Chat v1.5
 
 This document is an exhaustive, step-by-step guide to how **LangGraph** orchestrates the "thinking process" of this system. It covers everything from basic state management to the advanced asynchronous streaming logic that connects the LLM, the Vector Store, and the Frontend.
 
@@ -73,19 +73,23 @@ The "Brain" is wired in `backend/graph/workflow.py`. It uses a `StateGraph`.
 ### The Connectivity Map (Mermaid):
 ```mermaid
 graph TD
-    User([User Query]) --> Router{router}
+    User([User Query]) --> Start((Start))
     
-    subgraph "Decision Phase"
+    subgraph "Fused Path (Default)"
+        Start --> |Fused Config| Planner[Planner Node]
+        Planner --> |Plan: Chat| Generator
+        Planner --> |Plan: RAG| Retriever
+    end
+
+    subgraph "Modular Path (Legacy)"
+        Start --> |Modular Config| Router{Router}
         Router -->|intent: chat| Generator
-        Router -->|intent: rag| Rewriter
+        Router -->|intent: rag| Rewriter[Rewriter]
+        Rewriter --> Retriever[Retriever]
     end
 
-    subgraph "Knowledge Retrieval"
-        Rewriter[rewriter] --> Retriever[retriever]
+    subgraph "Execution"
         Retriever --> Generator[generator]
-    end
-
-    subgraph "Output Phase"
         Generator --> End([Streaming Response])
     end
 ```
@@ -100,9 +104,18 @@ graph TD
 
 ## 5. 🔬 Deep Dive: The Logic Nodes
 
-### A. The Router (The Gatekeeper)
+### A. The Planner (Fused Mode)
+*File: `backend/graph/nodes/planner.py`*
+
+The **Planner** is a high-intelligence node used in "Fused Mode".
+- **Role**: Replaces Router and Rewriter with a single LLM call.
+- **Output**: Generates a JSON plan containing the Intent, Rewritten Query, and Search Sub-queries all at once.
+- **Latency**: Saves ~4 seconds of network overhead.
+
+### B. The Router (Modular Mode)
 *File: `backend/graph/nodes/router.py`*
 
+Used in "Modular Mode" (stable for small models).
 The Router is designed for **Zero-Latency Accuracy**. It uses a three-tier check:
 1.  **Regex Check**: Instantly detects `@mentions` (e.g., "What's in @Policy.pdf?").
 2.  **Heuristic Check**: Scans for 50+ keywords (e.g., "write", "code", "hello") to identify "Casual Chat".
@@ -399,7 +412,7 @@ graph TD
 
 ## 🏗️ 11. The Formal State-Graph (Nodes & Edges)
 
-This is the mathematical representation of the **IPR RAG Brain v1.7**. It highlights the specific **Edges** (Transitions) and **Conditional Paths** used by the LangGraph engine.
+This is the mathematical representation of the **IPR RAG Brain v1.5**. It highlights the specific **Edges** (Transitions) and **Conditional Paths** used by the LangGraph engine.
 
 ```mermaid
 graph TD

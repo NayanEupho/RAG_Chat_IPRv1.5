@@ -33,7 +33,7 @@ graph TD
 
 ---
 
-## 🌟 Platinum Sync Features
+## 🌟 New Features (v1.5)
 
 *   **🕹️ Intelligence Mode Selector**: Seamlessly switch between **Auto** (Smart Intent Detection), **RAG** (Strict Knowledge Base), and **Chat** (Pure LLM) modes.
 *   **🧠 Unified Session Context**: 10-turn sliding memory window ensures the AI never loses context, even when switching interaction modes.
@@ -42,6 +42,7 @@ graph TD
 *   **🛡️ Performance Maintenance Suite**: Standalone tools for Knowledge Base integrity:
     *   **[`rebuild_knowledge_base.py`](./rebuild_knowledge_base.py)**: Total DB reset with high-fidelity progress tracking.
     *   **[`kb_debug.py`](./kb_debug.py)**: Semantic probing and inventory monitoring.
+*   **⚡ Dynamic Step Fusion (New)**: Switchable architecture (`fused`/`modular`) that reduces latency by 60% using a single-shot "Planner" node for large models.
 *   **📑 Hierarchical RAG**: Section-aware chunking preserves the relationship between headers and body text for surgical accuracy.
 *   **🩺 Proactive Health Probing**: Real-time monitoring of Ollama hosts and model availability ensures zero-latency failure detection.
 *   **💎 Premium Glassmorphic UI**: High-speed interface featuring live thinking states, source-strip transparency, and buttery animations.
@@ -68,6 +69,7 @@ graph TD
 ```bash
 # 1. Start Backend (Interactive Configuration Wizard)
 # Hint: Copy .env.example to .env for zero-click setup!
+# Note: Set RAG_WORKFLOW="fused" in .env for maximum speed (requires 70B+ model)
 uv run main.py
 
 # 2. Start Frontend

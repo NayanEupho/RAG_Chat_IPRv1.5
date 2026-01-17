@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 
 class OllamaConfig(BaseModel):
@@ -9,6 +9,24 @@ class AppConfig(BaseModel):
     main_model: Optional[OllamaConfig] = None
     embedding_model: Optional[OllamaConfig] = None
     
+    # RAG Workflow Mode: Determines the architectural graph structure.
+    # Options:
+    # 1. "fused" (Default): Uses a single 'Planner' node for routing/rewriting/planning. 
+    #    - Fastest (1 LLM call vs 3). 
+    #    - Requires a smarter model (e.g., 72B).
+    # 2. "modular" (Legacy): Uses separate Router -> Rewriter -> Retriever nodes.
+    #    - Slower (3 sequential LLM calls).
+    #    - More stable for smaller models (e.g., 7B) that struggle with complex instructions.
+    rag_workflow: str = "fused"
+
+    @field_validator("rag_workflow")
+    @classmethod
+    def validate_workflow(cls, v):
+        v = v.lower()
+        if v not in ["fused", "modular"]:
+            return "modular"  # Default to Safe Mode if invalid
+        return v
+
     @property
     def is_configured(self) -> bool:
         return self.main_model is not None and self.embedding_model is not None
