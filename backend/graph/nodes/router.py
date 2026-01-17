@@ -34,7 +34,7 @@ async def route_query(state: AgentState):
     if mode == 'chat':
         # Even if they select @file, if they forced 'Chat', we honor the mode for pure LLM interaction
         logger.info("[ROUTER] Mode: Forced Chat")
-        return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+        return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}
     
     # Check for mentions regardless of mode if RAG is involved
     mentions = re.findall(r"@([\w\-\. ]+?)(?=[,.;:!?\s]|$)", original_query)
@@ -51,7 +51,8 @@ async def route_query(state: AgentState):
             "query": cleaned_query if mentions else original_query,
             "targeted_docs": mentions,
             "documents": [],
-            "semantic_queries": []
+            "semantic_queries": [],
+            "query_embedding": None
         }
 
     # --- STEP 1: AUTO MODE (HEURISTICS) ---
@@ -79,19 +80,20 @@ async def route_query(state: AgentState):
             "query": cleaned_query,
             "targeted_docs": mentions,
             "documents": [],
-            "semantic_queries": []
+            "semantic_queries": [],
+            "query_embedding": None
         }
 
     # Fast-Path Keyword Heuristics
     for keyword in RAG_KEYWORDS:
         if keyword in query_lower:
             logger.info(f"[ROUTER] Auto Fast-Path: direct_rag (Keyword: '{keyword}')")
-            return {"intent": "direct_rag", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+            return {"intent": "direct_rag", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}
 
     for keyword in CHAT_KEYWORDS:
         if keyword in query_lower:
             logger.info(f"[ROUTER] Auto Fast-Path: chat (Keyword: '{keyword}')")
-            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}
 
     # --- STEP 2: AUTO MODE (SOTA SEMANTIC + VECTOR CHECK) ---
     # This is the "Smart" part. We check if the Knowledge Base actually contains relevant info.
@@ -113,7 +115,7 @@ async def route_query(state: AgentState):
         
         if not has_knowledge and not is_follow_up:
             logger.info("[ROUTER] Auto: No knowledge found & not a follow-up -> Chat")
-            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": emb}
             
         # Final arbiter: Semantic LLM intent check
         client = OllamaClientWrapper.get_chat_model()
@@ -145,9 +147,10 @@ async def route_query(state: AgentState):
         intent = result.get("intent", "chat").lower()
         
         logger.info(f"[ROUTER] Auto Semantic Intent: {intent}")
-        return {"intent": intent, "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+        # Pass the embedding to retriever to avoid duplicate API call
+        return {"intent": intent, "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": emb}
             
     except Exception as e:
         logger.warning(f"[ROUTER] Smart Routing failed: {e}. Defaulting to RAG for safety.")
 
-    return {"intent": "direct_rag", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": []}
+    return {"intent": "direct_rag", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}

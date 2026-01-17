@@ -23,7 +23,7 @@ class VectorStore:
         logger.info(f"Vector Store initialized at {persist_dir}")
 
     def add_documents(self, texts: List[str], metadatas: List[Dict[str, Any]], ids: List[str], embeddings: List[List[float]]):
-        """Adds processed chunks with embeddings to the store."""
+        """Adds processed chunks with embeddings to the store. Lock protects writes."""
         if not texts:
             return
             
@@ -37,22 +37,27 @@ class VectorStore:
         logger.info(f"[STORE] Added {len(texts)} documents. Total in collection: {self.collection.count()}")
 
     def query(self, query_embeddings: List[List[float]], n_results: int = 5, where: Optional[Dict] = None) -> dict:
-        """Queries the store using embeddings."""
-        with self.lock:
-            return self.collection.query(
-                query_embeddings=query_embeddings,
-                n_results=n_results,
-                where=where
-            )
+        """
+        Queries the store using embeddings.
+        Note: ChromaDB reads are thread-safe, so no lock needed for concurrent queries.
+        This removes the read-side bottleneck that was serializing all operations.
+        """
+        return self.collection.query(
+            query_embeddings=query_embeddings,
+            n_results=n_results,
+            where=where
+        )
 
     def get_by_metadata(self, where: Dict[str, Any], limit: int = 5) -> dict:
-        """Retrieves documents directly by metadata (filtering without embedding)."""
-        with self.lock:
-            return self.collection.get(
-                where=where,
-                limit=limit,
-                include=['documents', 'metadatas']
-            )
+        """
+        Retrieves documents directly by metadata (filtering without embedding).
+        Note: ChromaDB reads are thread-safe, so no lock needed.
+        """
+        return self.collection.get(
+            where=where,
+            limit=limit,
+            include=['documents', 'metadatas']
+        )
 
     def count(self) -> int:
         with self.lock:

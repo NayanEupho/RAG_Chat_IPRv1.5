@@ -12,10 +12,11 @@ Welcome to the **Master Architecture Guide**. This document is designed to take 
 3.  **[Encyclopedia] The Tech Stack Master List**: A-Z of Frameworks & Libraries.
 4.  **[The Brain] LangGraph Deep Dive**: Router, Rewriter, Retriever, Generator.
 5.  **[The Body] Ingestion & Storage**: Docling, Watchdog, and ChromaDB.
-6.  **[The Senses] The Frontend Layer**: Next.js, SSE, and Glassmorphism.
-7.  **[Hardening] Performance & Security**: Thread Safety and Local Sovereignty.
+6.  **[Lifecycle] The Data Loop**: Ingestion vs. Retrieval.
+7.  **[The Senses] The Frontend Layer**: Next.js, SSE, and Glassmorphism.
 8.  **[Config] Hybrid Configuration System**: .env Logic and Validation.
-9.  **[The Workshop] Maintenance Suite**: Rebuild, Probes, and Debugging.
+9.  **[The Lifecycle] Query & Retrieval**: From Prompt to Synthesis.
+10. **[The Workshop] Maintenance Suite**: Rebuild, Probes, and Debugging.
 
 ---
 
@@ -201,7 +202,60 @@ We don't just split by "1000 characters." We split by **Markdown Headings** (`#`
 
 ---
 
-# 💎 Part V: The Frontend (The Command Center)
+---
+
+# � Part V: The Data Lifecycle (Query & Retrieval)
+
+How does a single prompt become a high-intelligence, context-aware answer?
+
+```mermaid
+sequenceDiagram
+    participant U as User (Next.js)
+    participant A as API (FastAPI)
+    participant G as LangGraph (Brain)
+    participant R as Router Node
+    participant RE as Rewriter Node
+    participant RT as Retriever (Chroma)
+    participant RR as Reranker (FlashRank)
+    participant GEN as Generator (Ollama)
+
+    U->>A: POST /api/chat/stream
+    A->>G: Invoke workflow()
+    G->>R: Stage 1: Analyze Intent
+    
+    alt Mode: Direct Chat
+        R-->>G: intent: chat
+    else Mode: RAG / Auto
+        R-->>G: intent: rag
+        G->>RE: Stage 2: Semantic Expansion
+        RE-->>G: Transformed Queries
+        G->>RT: Stage 3: Vector Search
+        RT-->>G: Raw Context Chunks
+        G->>RR: Stage 4: Cross-Encoder Rerank
+        RR-->>G: Top-5 Gold Chunks
+    end
+
+    G->>GEN: Stage 5: Adaptive Synthesis
+    GEN-->>A: Token-by-Token Stream
+    A-->>U: SSE Response Stream
+```
+
+### 1. Intent Routing (The Zero-Latency Filter)
+The system doesn't waste energy on obvious chat. If you say "Hello", the **Router** detects it instantly via heuristics and skips the vector search, ensuring 100% responsiveness.
+
+### 2. Semantic Query Rewriting
+"What's the sick leave policy?" is a bad search query. The **Rewriter** converts it into high-fidelity search terms like *"Employee absence guidelines"* and *"Medical leave procedures"* to bridge the gap between human language and document jargon.
+
+### 3. The Retrieval & Re-ranking Pipeline
+- **ChromaDB**: Performs the broad "Mass Search" to find the most mathematically similar text.
+- **FlashRank**: Takes those results and re-scores them for **relevancy**. This ensures that even if a document mentions "Sick" in a different context, the *actual* policy is what the AI sees.
+
+### 4. Adaptive Generation & SSE
+The **Generator** is "Adaptive"—it only uses the documents if they actually help answer the question. The result is then pushed via **SSE** (Server-Sent Events) so the user begins seeing the answer within milliseconds.
+
+---
+
+# �💎 Part VI: The Frontend (The Command Center)
 
 Our UI isn't just a skin; it's a sophisticated data consumer.
 
@@ -234,7 +288,7 @@ The Next.js frontend is designed with two distinct operational modes:
 
 ---
 
-# 🛡 Part VI: Security, Privacy & Performance
+# 🛡 Part VII: Security, Privacy & Performance
 
 ### 1. Local-First Sovereignty
 In an era of data leaks, this project is a fortress.
@@ -249,7 +303,7 @@ In an era of data leaks, this project is a fortress.
 
 ---
 
-# ⚙️ Part VII: Configuration Architecture (The Hybrid System)
+# ⚙️ Part VIII: Configuration Architecture (The Hybrid System)
 
 The system utilizes a **Hybrid Configuration System** designed to bridge the gap between developer automation and user-friendly interaction. This system ensures that the project remains "Zero-Config" for beginners while providing "Zero-Interaction" capabilities for power users.
 
@@ -296,7 +350,7 @@ Once settings are confirmed (either via `.env` or Wizard), the system "locks" th
 
 ---
 
-# 🛰️ Part VIII: Component Specializations (Encyclopedias)
+# 🛰️ Part IX: Component Specializations (Encyclopedias)
 
 For masters seeking the absolute limits of the system, we have created dedicated deep-dives for core components:
 
@@ -307,7 +361,7 @@ For masters seeking the absolute limits of the system, we have created dedicated
 
 ---
 
-# 🛠 Part IX: The Maintenance Workshop
+# 🛠 Part X: The Maintenance Workshop
 
 A production system needs tools to keep it healthy.
 
@@ -321,7 +375,7 @@ Ever wonder why the AI gave a bad answer?
 
 ---
 
-# 🔬 Part X: Granular Module Analysis (Code Deep-Dive)
+# 🔬 Part XI: Granular Module Analysis (Code Deep-Dive)
 
 To understand the system at a professional level, we must look at the specific files and how they implement the theories discussed above.
 
@@ -358,7 +412,7 @@ To understand the system at a professional level, we must look at the specific f
 
 ---
 
-# 💡 Part XI: Comparative Analysis (Why This Approach?)
+# 💡 Part XII: Comparative Analysis (Why This Approach?)
 
 | Feature | Standard RAG | IPR Platinum Sync (v1.7) |
 | :--- | :--- | :--- |

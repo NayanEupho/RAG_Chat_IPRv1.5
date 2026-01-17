@@ -202,12 +202,11 @@ async def retrieve_documents(state: AgentState):
     unique_docs = list(unique_docs_map.values())
     logger.info(f"[RETRIEVER] Found {len(unique_docs)} unique documents across {len(queries_to_run)} queries.")
 
-    # 3. Rerank
+    # 3. Rerank (now async - offloaded to ThreadPoolExecutor)
     from backend.rag.reranker import Reranker
     reranker = Reranker()
-    # Rerank against the ORIGINAL query to ensure relevance to user's intent
-    # Increased top_k from 7 to 15 to prevent "Table of contents" chunks from crowding out real data
-    ranked_docs = reranker.rank(query, unique_docs, top_k=15)
+    # Reduced from 15 to 7 for better performance while maintaining accuracy
+    ranked_docs = await reranker.rank(query, unique_docs, top_k=7)
     
     logger.info(f"[RETRIEVER] Reranked to top {len(ranked_docs)} documents.")
 

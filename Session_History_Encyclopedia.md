@@ -78,6 +78,57 @@ Your history database doesn't just store "What" was said, but **"How"** it was s
 
 ---
 
+## 🛰️ 6. The SQLite-LangGraph Bridge (Execution Logic)
+
+This diagram highlights how **SQLite** serves as the persistent anchor for **LangGraph's** volatile execution. It shows the hand-off between session initialization and final message persistence.
+
+```mermaid
+flowchart TD
+    subgraph "Phase 1: Session Initialization"
+        A[API: POST /chat/stream] --> B{history.py: create_session}
+        B --> C[(SQLite: sessions table)]
+        C --> D[Success: session_id = thread_id]
+    end
+
+    subgraph "Phase 2: LangGraph Execution"
+        D --> E[graph.ainvoke thread_id]
+        E --> F{Nodes: Router / Retriever}
+        
+        subgraph "Volatile State"
+            F --> G[MemorySaver: Snapshot State]
+        end
+    end
+
+    subgraph "Phase 3: Terminal Persistence"
+        F --> H[Node: Generator Complete]
+        H --> I{history.py: add_message}
+        
+        subgraph "Commit to Disk"
+            I --> J[(SQLite: messages table)]
+            J -.-> J1[Store: Content]
+            J -.-> J2[Store: Intent]
+            J -.-> J3[Store: Thoughts JSON]
+            J -.-> J4[Store: Sources JSON]
+        end
+    end
+
+    %% Connectivity
+    A -.->|thread_id| E
+    H -.->|SSE Tokens| K[Frontend UI]
+
+    %% Styling
+    style C fill:#dfd,stroke:#333
+    style J fill:#dfd,stroke:#333
+    style G fill:#fff,stroke-dasharray: 5 5
+    style E fill:#e0f2fe,stroke:#0369a1
+```
+
+### 🧠 Why the Split?
+- **SQLite (sessions/messages)**: Used for "Human-Readable History." This is what allows the user to see their past chats across restarts.
+- **Memory (Checkpoints)**: Used for "Machine-Readable Context." This keeps the active "Thinking" process fast and prevents IO-wait deadlocks during streaming.
+
+---
+
 ## ⌨️ 6. Common Queries & Manual Management
 
 If you ever need to manually inspect the history, you can open the file with any SQLite viewer (like DB Browser for SQLite) or use these SQL snippets:
