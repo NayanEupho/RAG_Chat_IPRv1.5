@@ -22,6 +22,9 @@ uv run cli.py
     - `/exit`: Close the session.
     - `/history`: (Upcoming) View past interaction logs.
 
+> [!NOTE]
+> **Brevity-First Response**: By default, the AI generates concise answers (< 4 sentences). To see more detail in the CLI, simply append "expand in detail" to your query.
+
 ---
 
 ## 🚀 Native Features

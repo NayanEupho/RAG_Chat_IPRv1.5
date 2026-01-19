@@ -492,13 +492,24 @@ export default function ChatInterface() {
                                 onChange={setActiveMode}
                                 disabled={loading}
                             />
-                            <button
-                                onClick={triggerSend}
-                                disabled={loading || !textareaRef.current?.value.trim()}
-                                className="send-btn"
-                            >
-                                <Send size={20} />
-                            </button>
+                            {loading ? (
+                                <button
+                                    onClick={stopGeneration}
+                                    className="stop-btn"
+                                    title="Stop generating"
+                                >
+                                    <Square size={20} fill="currentColor" />
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={triggerSend}
+                                    disabled={!inputValue.trim()}
+                                    className="send-btn"
+                                    title="Send message"
+                                >
+                                    <Send size={20} />
+                                </button>
+                            )}
                         </div>
                         <div style={{ textAlign: 'center', marginTop: '12px', fontSize: '0.7rem', color: 'var(--fg-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                             IPR Agent v2.0 • AI can make mistakes.

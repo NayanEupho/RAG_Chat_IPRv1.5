@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from backend.graph.workflow import build_graph
@@ -58,22 +58,22 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/chat/stream")
-async def chat_stream_endpoint(request: ChatRequest):
+async def chat_stream_endpoint(request_body: ChatRequest, request: Request):
     """
     Streaming chat endpoint with History Logging.
     """
     from backend.state.history import add_message, create_session
     
     # Ensure session exists
-    create_session(request.session_id)
+    create_session(request_body.session_id)
     
     # Log User Message Immediately
-    add_message(request.session_id, "user", request.message)
+    add_message(request_body.session_id, "user", request_body.message)
 
-    config = {"configurable": {"thread_id": request.session_id}}
+    config = {"configurable": {"thread_id": request_body.session_id}}
     inputs = {
-        "messages": [HumanMessage(content=request.message)],
-        "mode": request.mode
+        "messages": [HumanMessage(content=request_body.message)],
+        "mode": request_body.mode
     }
 
     async def sse_generator():
@@ -88,8 +88,12 @@ async def chat_stream_endpoint(request: ChatRequest):
            yield f"event: status\ndata: {initial_status}\n\n"
            
            async for event in get_graph().astream_events(inputs, config=config, version="v1"):
+               # CHECK FOR DISCONNECTION
+               if await request.is_disconnected():
+                   logger.info(f"[STREAM] Client disconnected for session {request_body.session_id}. Aborting graph execution.")
+                   return # Early exit stops the generator and effectively cancels the graph processing
+
                event_type = event["event"]
-               # print(f"DEBUG: Event: {event_type}") # Removed as per instruction snippet
                if event_type == "on_chain_start":
                    name = event["name"]
                    status_data = None
@@ -110,7 +114,6 @@ async def chat_stream_endpoint(request: ChatRequest):
 
                if event_type == "on_chat_model_stream":
                    # Filter: Only yield tokens from the actual Answer Generator
-                   # This prevents the Router's internal classification (JSON) from leaking.
                    meta = event.get("metadata", {})
                    node = meta.get("langgraph_node", "")
                    
@@ -128,9 +131,7 @@ async def chat_stream_endpoint(request: ChatRequest):
            final_docs = final_state.values.get("documents", [])
            targeted_docs = final_state.values.get("targeted_docs", [])
            
-           # Deduplicate Sources while preserving content
-           # The frontend expects "Source: {name}\nContent: {text}"
-           # We group chunks by filename so the UI shows one button per file.
+           # Deduplicate Sources
            unique_sources = {}
            for doc in final_docs:
                 if "Source: " in doc and "\nContent: " in doc:
@@ -157,16 +158,17 @@ async def chat_stream_endpoint(request: ChatRequest):
 
            # Log Bot Response with Metadata AND Thoughts
            add_message(
-               request.session_id, 
+               request_body.session_id, 
                "bot", 
                full_response, 
                final_intent, 
-               deduped_docs, # Save deduped docs as sources
+               deduped_docs, 
                metadata={"targeted_docs": targeted_docs},
                thoughts=thoughts
            )
         
         except Exception as e:
+            logger.error(f"[STREAM] Error in sse_generator: {e}")
             yield f"event: error\ndata: {str(e)}\n\n"
 
     from fastapi.responses import StreamingResponse

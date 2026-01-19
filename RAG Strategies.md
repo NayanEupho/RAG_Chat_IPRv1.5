@@ -2,6 +2,8 @@
 
 > [!IMPORTANT]
 > **IPR RAG Chat v1.5** implements these elite strategies natively:
+> - **Dynamic Step Fusion**: One-Shot "Planner" node for low-latency scaling (70B+ models).
+> - **Brevity-First Generation**: Adaptive verbosity control (concise by default, detailed on demand).
 > - **Agentic Graph Routing**: Intelligent intent detection via LangGraph.
 > - **Hierarchical RAG**: Section-aware chunking (Docling + Heading Tags).
 > - **Two-Stage Retrieval**: Vector Search + FlashRank Cross-Encoder Re-ranking.

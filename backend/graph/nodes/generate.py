@@ -65,8 +65,27 @@ async def generate_answer(state: AgentState):
             logger.info(f"[GENERATE] Token budget applied: {len(selected_docs)}/{len(docs)} docs selected")
         context_block = "\n\n".join(selected_docs)
         
+    # 3. BREVITY & STYLE CONTROL
+    # Detect if the user wants a detailed explanation
+    detail_keywords = ["detail", "comprehensive", "step by step", "elaborate", "full", "detailed", "depth"]
+    latest_query = state.get('query', messages[-1].content).lower()
+    is_detailed = any(k in latest_query for k in detail_keywords)
+    
+    if is_detailed:
+        style_instruction = (
+            "STYLE: Provide a comprehensive, step-by-step explanation. "
+            "Cover edge cases and technical background context as found in the knowledge base."
+        )
+    else:
+        style_instruction = (
+            "STYLE: Be extremely crisp, precise, and to-the-point. "
+            "Avoid introductory fluff or restating the question. "
+            "Use bullet points for lists. Answer in < 4 sentences if possible."
+        )
+
     system_instruction = (
         "You are a helpful and intelligent AI assistant with access to a Knowledge Base.\n"
+        f"{style_instruction}\n"
         "Session Awareness: You have access to the conversation history. Maintain continuity.\n"
         "Adaptive Knowledge Usage:\n"
         "1. If a <knowledge_base> is provided, use it ONLY if it is relevant to the user's latest query.\n"
@@ -74,7 +93,7 @@ async def generate_answer(state: AgentState):
         "3. Always prioritize a natural conversational flow."
     )
     
-    # 3. PROMPT CONSTRUCTION
+    # 4. PROMPT CONSTRUCTION
     if intent in ["direct_rag", "specific_doc_rag"]:
         targeting_context = ""
         semantic_maps = state.get('semantic_queries', [])

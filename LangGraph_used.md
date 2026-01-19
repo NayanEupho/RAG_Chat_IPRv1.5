@@ -141,9 +141,10 @@ The most complex node in the project. It doesn't just search; it **investigates*
 ### D. The Generator (The Expert)
 *File: `backend/graph/nodes/generate.py`*
 
-The final stage. It is **Adaptive**.
+The final stage. It is **Adaptive** and **Resource-Efficient**.
 - **Context Injection**: It wraps retrieved documents in `<knowledge_base>` tags.
-- **Instruction Tuning**: Tells the LLM: *"If the documents don't answer the question, don't lie. Just chat normally."*
+- **Brevity-First Logic**: By default, it uses high-pressure system instructions to keep answers to **< 4 sentences**.
+- **Deep-Dive Override**: Detects "detail-oriented" keywords in the user query to dynamically restore comprehensive explanation mode.
 - **Sliding Window**: It trims old messages to prevent the "Context Overflow" that makes LLMs slow and forgetful.
 
 ---

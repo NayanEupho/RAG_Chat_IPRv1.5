@@ -43,10 +43,26 @@ The startup process uses a **Hybrid Configuration System**:
 
 ---
 
-## 🖥 3. Interface & Intelligence Modes
+## ⚡ 3. Performance Optimization
+
+### Dynamic Step Fusion (The Speed Switch)
+You can choose your graph architecture in your `.env` file:
+- **`RAG_WORKFLOW="fused"`**: (Recommended for 70B+ models). Combines planning and retrieval into one step. Reduces latency significantly.
+- **`RAG_WORKFLOW="modular"`**: (Recommended for 7B/14B models). Uses a sequential chain (Router → Rewriter → Retriever) for maximum stability on smaller models.
+
+---
+
+## 🖥 4. Interface & Intelligence Modes
 
 ### Modern Web GUI (Recommended)
 Navigate to `http://localhost:3000` after running `bun dev` in the frontend folder.
+
+#### 🛑 Full-Stack Stop Control
+If the AI starts a long generation you don't need, click the **Red Stop Button** (replaces the Send arrow). This kills both the UI stream and the backend LLM task immediately.
+
+#### ✂️ Brevity Control
+By default, the AI ignores "fluff" and provides concise (< 4 sentence) answers.
+- **To see more**: Ask *"Explain in detail"* to unlock comprehensive mode.
 
 #### 🕹️ Intelligence Mode Selector:
 - **Auto (Smart)**: Automatically detects if you need document search or casual chat.
@@ -61,7 +77,7 @@ Watch the AI's step-by-step reasoning (Analyzing → Searching → Generating) i
 
 ---
 
-## 🛡 4. Professional Maintenance Suite
+## 🛡 5. Professional Maintenance Suite
 
 Instead of manual folder deletion, use these high-fidelity utilities for system integrity:
 

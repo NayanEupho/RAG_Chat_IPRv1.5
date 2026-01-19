@@ -31,11 +31,20 @@ When retrieval occurs, interactive source cards appear at the top of the AI's re
 - **Context Preview**: Cards show a snippet of the text before you even click them.
 - **Frosted Modals**: Click any card to read the full source text in a premium overlay.
 
+### 5. The Hard Stop 🛑
+During generation, the **Send** button transforms into a **Red Square**.
+- **Instant Abort**: Clicking it immediately cancels the frontend stream and instructs the backend to kill the LLM process, ensuring zero resource waste.
+- **Pulse Feedback**: The button pulses subtly while the AI is thinking to indicate active processing.
+
+### 6. Brevity-First Responses ✂️
+The AI is tuned to be respect your time:
+- **Concise by default**: Most answers are < 4 sentences and use bullet points.
+- **Deep Dive Override**: Simply ask *"Explain in detail"* or *"Provide a comprehensive breakdown"* to trigger the high-fidelity generation mode.
+
 ---
 
 ## 🛠 Advanced Controls
 
-- **Stop Generation**: Use the **Square Icon** to immediately kill an LLM stream.
 - **Session Cleanup**: Use the **Trash Icon** in the sidebar to permanently delete conversations.
 - **Knowledge Viewer**: Click the **Database Icon** to see a grid view of all indexed files.
 

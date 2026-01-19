@@ -8,24 +8,30 @@ graph TD
     UI -- "Mode (Auto/RAG/Chat)" --> API[FastAPI Gateway]
     
     subgraph "Intelligent Orchestration (LangGraph)"
-        API --> Router{Smart Router}
-        Router -- "@mentions" --> Segmenter[Semantic Segmenter]
-        Router -- "Auto Routing" --> Decision[Heuristic & Proximity check]
+        API --> Config{Fused or Modular?}
         
-        Segmenter --> Retriever[Context-Aware Retriever]
+        Config -- "Fused (Speed)" --> Planner[One-Shot Planner]
+        Planner -->|RAG| Retriever[Context Retriever]
+        Planner -->|Chat| Gen
+        
+        Config -- "Modular (7B/14B)" --> Router{Intent Router}
+        Router -- "@mentions" --> Segmenter[Semantic Segmenter]
+        Router -- "Auto Routing" --> Decision[Heuristic Matcher]
+        
+        Segmenter --> Retriever
         Decision -- "Context needed" --> Rewriter[Query Rewriter]
         Rewriter --> Retriever
         
-        Retriever --> Rerank[FlashRank Reranker]
+        Retriever --> Rerank[FlashRank Filter]
         Rerank --> Gen[Adaptive Generator]
         Decision -- "Casual Chat" --> Gen
     end
 
     subgraph "Core Engines"
-        Files[(upload_docs/)] --> Watcher[Watchdog Service]
+        Files[(upload_docs/)] --> Watcher[Watchdog]
         Watcher --> Proc[Docling Processor]
-        Proc -- "Hierarchical Chunks" --> DB[(ChromaDB)]
-        Gen -- "Context Injection" --> Ollama[Ollama LLM]
+        Proc --> DB[(ChromaDB)]
+        Gen -- "Local LLM" --> Ollama[Ollama]
     end
 
     Gen --> UI
@@ -42,7 +48,9 @@ graph TD
 *   **🛡️ Performance Maintenance Suite**: Standalone tools for Knowledge Base integrity:
     *   **[`rebuild_knowledge_base.py`](./rebuild_knowledge_base.py)**: Total DB reset with high-fidelity progress tracking.
     *   **[`kb_debug.py`](./kb_debug.py)**: Semantic probing and inventory monitoring.
-*   **⚡ Dynamic Step Fusion (New)**: Switchable architecture (`fused`/`modular`) that reduces latency by 60% using a single-shot "Planner" node for large models.
+*   **⚡ Dynamic Step Fusion**: Switchable architecture (`fused`/`modular`) that reduces latency by 60% using a single-shot "Planner" node for large models.
+*   **✂️ Brevity-First Strategy**: Default concise responses (< 4 sentences) for maximum efficiency, with automatic "Deep Dive" mode for detailed queries.
+*   **🛑 Master Stop Toggle**: A "Hard Stop" mechanism that halts both the UI stream and backend LLM processing instantly, preventing resource waste.
 *   **📑 Hierarchical RAG**: Section-aware chunking preserves the relationship between headers and body text for surgical accuracy.
 *   **🩺 Proactive Health Probing**: Real-time monitoring of Ollama hosts and model availability ensures zero-latency failure detection.
 *   **💎 Premium Glassmorphic UI**: High-speed interface featuring live thinking states, source-strip transparency, and buttery animations.
