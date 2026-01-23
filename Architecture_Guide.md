@@ -1,5 +1,5 @@
-# 🧠 The Definitive Architecture Encyclopedia (v1.5)
-## IPR RAG Chat: From Silicon to Synthesis
+# 🧠 The Definitive Architecture Encyclopedia (v1.6.1)
+## IPR RAG Chat: Platinum Intelligence v1.6.1
 
 Welcome to the **Master Architecture Guide**. This document is designed to take you from a curious beginner to a master of the **IPR RAG Chat** system. We will explore every gear, every line of logic, and every architectural decision that makes this system a state-of-the-art (SOTA) agentic assistant.
 
@@ -16,7 +16,7 @@ Welcome to the **Master Architecture Guide**. This document is designed to take 
 7.  **[The Senses] The Frontend Layer**: Next.js, SSE, and Glassmorphism.
 8.  **[Config] Hybrid Configuration System**: .env Logic and Validation.
 9.  **[The Lifecycle] Query & Retrieval**: From Prompt to Synthesis.
-10. **[The Workshop] Maintenance Suite**: Rebuild, Probes, and Debugging.
+20. **[The Workshop] Maintenance Suite**: Rebuild, Reindex, and Probes.
 
 ---
 
@@ -167,6 +167,12 @@ Most RAG systems retrieve a small snippet. We use **Neighbor-Window Retrieval**:
 ### 4. The Generator: The Adaptive Synthesizer
 The generator is told: *"You are an assistant. Here is some data. If the data is garbage, IGNORE IT."*
 This **Adaptive Injection** prevents the AI from hallucinating based on bad search results.
+
+### 5. Brevity-First Strategy (Response Optimization)
+To maximize user readability, the generator follows a **Brevity-First** instruction set by default:
+- **Crisp Delivery**: Answers are limited to < 4 sentences unless background details are requested.
+- **Dynamic Deep-Dive**: The system monitors the user query for keywords like "explain in detail" or "step by step." If detected, it automatically expands the response limit to provide a comprehensive explanation.
+- **Resource Efficiency**: Reduces token usage on the LLM host while improving information density.
 
 ---
 
@@ -355,6 +361,11 @@ Configuration isn't just checked at startup. The system provides an `/api/status
 Once settings are confirmed (either via `.env` or Wizard), the system "locks" them into the operational environment using `os.environ`. 
 - **Atomic Consistency**: By writing to the process environment variables, every child module (from the Graph Orchestrator to the Embedder) pulls from a single source of truth without needing to pass config objects between functions.
 
+### 6. Strict Configuration Enforcement (Root Cause Safety)
+To prevent silent failures where the system might "guess" a local model when a remote HPC host is intended, we implement **Fail-Fast Validation**:
+- **Explicit Loading**: All utilities (including `embedding_debug.py`) explicitly invoke `load_dotenv()` before configuration detection.
+- **Zero-Guessing Policy**: If required variables like `RAG_EMBED_HOST` are missing from the environment, the system is designed to **exit immediately** with a diagnostic error rather than falling back to dangerous local defaults. This ensures that every operation is explicitly authorized by your configuration.
+
 ---
 
 # 🛰️ Part IX: Component Specializations (Encyclopedias)
@@ -370,15 +381,21 @@ For masters seeking the absolute limits of the system, we have created dedicated
 
 # 🛠 Part X: The Maintenance Workshop
 
-A production system needs tools to keep it healthy.
+A production system needs tools to keep it healthy. We have consolidated our maintenance logic into the **Unified Embedding Debug Manager** (`embedding_debug.py`).
 
-### 1. The Rebuild Wizard (`rebuild_knowledge_base.py`)
-If you change your embedding model (e.g., from `all-minilm` to `mxbai`), the old vectors are now useless. 
-- **The Fix**: This script performs a **Hard Reset**. It wipes the DB and re-indexes everything using your new settings.
+### 1. System Rebuild & Atomic Re-indexing
+- **`rebuild`**: Performs a hard reset of the vector database. It wipes existing data and re-indexes the entire `upload_docs/` folder using the production-grade Docling pipeline.
+- **`reindex`**: Allows for "Surgical Maintenance." It deletes all chunks for a specific file and re-processes it from scratch, ensuring 100% consistency without a full system wipe.
 
-### 2. The Semantic Probe (`kb_debug.py`)
+### 2. The Semantic Probe
 Ever wonder why the AI gave a bad answer? 
-- **The Fix**: Use `--probe "question"`. This shows you the **raw chunks** the DB found. If the chunks are bad, your document might be formatted poorly or your search query needs expansion.
+- **The Fix**: Use `probe "question"`. This shows you the **raw chunks** and **distance scores** found in ChromaDB. If the scores are high (e.g., > 1.2), it indicates that the documents or the embedding model need adjustment.
+
+### 3. Noise & System Filtering
+The maintenance suite is "Aware" of system noise. It automatically filters out:
+- **Hidden Files**: Like `.gitkeep` or `.DS_Store`.
+- **Temp Files**: Like Microsoft Office lockfiles (`~$Document.docx`).
+- **Extensions**: Only whitelisted formats (`.pdf`, `.docx`, `.pptx`, `.html`, `.txt`) are processed, ensuring the logs remain clean and relevant.
 
 ---
 
@@ -443,5 +460,4 @@ We don't just answer; we **Synthesize**.
 This is the future of private, document-centric AI. Ready to start? Head over to the [Master_Usage.md](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/Master_Usage.md) to launch the system!
 
 ---
-*Generated by Antigravity RAG Maintenance Engine v2.0*
-*Document ID: ARCH-ENCYCLO-17-2026*
+

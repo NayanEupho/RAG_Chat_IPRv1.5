@@ -111,7 +111,7 @@ ADAPTIVE KNOWLEDGE BASE:
 {context_block}
 </knowledge_base>
 
-Citations: If you use the knowledge base, cite sections like [Section: Name].
+Citations: If you use the knowledge base, cite specific segments using the provided 'Source' and 'Section' (e.g. [Source: file.pdf | Section: Networking]).
 Question: {state.get('query', messages[-1].content)}
 """
         # Replace the last user message's content with the RAG-augmented prompt

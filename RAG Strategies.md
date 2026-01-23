@@ -1,14 +1,14 @@
 # Advanced RAG Strategies - Complete Guide
 
 > [!IMPORTANT]
-> **IPR RAG Chat v1.5** implements these elite strategies natively:
+> **IPR RAG Chat v1.6** implements these elite strategies natively:
 > - **Dynamic Step Fusion**: One-Shot "Planner" node for low-latency scaling (70B+ models).
 > - **Brevity-First Generation**: Adaptive verbosity control (concise by default, detailed on demand).
 > - **Agentic Graph Routing**: Intelligent intent detection via LangGraph.
-> - **Hierarchical RAG**: Section-aware chunking (Docling + Heading Tags).
+> - **Platinum Hierarchical RAG**: Recursive Section-aware chunking (H1-H6) with "Breadcrumb Paths".
 > - **Two-Stage Retrieval**: Vector Search + FlashRank Cross-Encoder Re-ranking.
-> - **Contextual Expansion**: Automated neighbor-chunk retrieval (Window Search).
-> - **Targeted Retrieval**: Enforced metadata filtering via `@mentions`.
+> - **Contextual Expansion**: Automated neighbor-chunk retrieval (+/- 1 index Sliding Window).
+> - **Super-Structured Prompts**: Encapsulating context in labeled Markdown envelopes.
 
 ---
 
@@ -67,41 +67,18 @@ graph TD
 | 11 | [Fine-tuned Embeddings](#11-fine-tuned-embeddings) | 📝 Pseudocode Only | Domain-specific | Best accuracy | Training required |
 
 ### Legend
-- ✅ **Code Example**: Full code in `implementation/` (educational, not production-ready)
-- 📝 **Pseudocode Only**: Conceptual examples in `examples/`
+- ✅ **Native Implementation**: Fully integrated into the `backend/` production pipeline.
+- 📝 **Architectural Concept**: Documented in guides but not currently prioritized for the v1.5 core.
 
 ---
 
-## 🚀 Quick Start
-
-### View Pseudocode Examples
-
-```bash
-cd examples
-# Browse simple, < 50 line examples for each strategy
-cat 01_reranking.py
-```
-
-### Run the Code Examples (Educational)
-
-> **Note**: These are educational examples to show how strategies work in real code. Not guaranteed to be fully functional or production-ready.
-
-```bash
-cd implementation
-
-# Install dependencies
-pip install -r requirements-advanced.txt
-
-# Setup environment
-cp .env.example .env
-# Edit .env: Add DATABASE_URL and OPENAI_API_KEY
-
-# Ingest documents (with optional contextual enrichment)
-python -m ingestion.ingest --documents ./documents --contextual
-
-# Run the advanced agent
-python rag_agent_advanced.py
-```
+### Explore Native Implementations
+The core strategies are implemented across the following files:
+- **Graph Orchestration**: [backend/graph/workflow.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/workflow.py)
+- **Fused Planning**: [backend/graph/nodes/planner.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/planner.py)
+- **Agentic Routing**: [backend/graph/nodes/router.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/router.py)
+- **Precise Retrieval**: [backend/graph/nodes/retriever.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/retriever.py)
+- **Adaptive Generation**: [backend/graph/nodes/generate.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/generate.py)
 
 ---
 
@@ -193,32 +170,7 @@ Two-stage retrieval: Vector search (20-50+ candidates) → Reranking model to fi
 
 ❌ Slightly slower than pure vector search, uses more compute
 
-### Code Example
-```python
-# Lines 194-256 in rag_agent_advanced.py
-async def search_with_reranking(ctx: RunContext[None], query: str, limit: int = 5) -> str:
-    """Two-stage retrieval with cross-encoder re-ranking."""
-    initialize_reranker()  # Loads cross-encoder/ms-marco-MiniLM-L-6-v2
-
-    # Stage 1: Fast vector retrieval (retrieve 20 candidates)
-    candidate_limit = min(limit * 4, 20)
-    results = await vector_search(query, candidate_limit)
-
-    # Stage 2: Re-rank with cross-encoder
-    pairs = [[query, row['content']] for row in results]
-    scores = reranker.predict(pairs)
-
-    # Sort by new scores and return top N
-    reranked = sorted(zip(results, scores), key=lambda x: x[1], reverse=True)[:limit]
-    return format_results(reranked)
-```
-
-**Model**: `cross-encoder/ms-marco-MiniLM-L-6-v2`
-
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#4-re-ranking)
-- Pseudocode: [01_reranking.py](examples/01_reranking.py)
-- Research: [docs/01-reranking.md](docs/01-reranking.md)
+**Implementation**: [backend/rag/reranker.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/rag/reranker.py)
 
 ---
 
@@ -243,41 +195,7 @@ Agent autonomously chooses between multiple retrieval tools.
 
 ❌ More complex, less predictable behavior
 
-### Code Example
-```python
-# Tool 1: Semantic search (Lines 263-305)
-@agent.tool
-async def search_knowledge_base(query: str, limit: int = 5) -> str:
-    """Standard semantic search over document chunks."""
-    query_embedding = await embedder.embed_query(query)
-    results = await db.match_chunks(query_embedding, limit)
-    return format_results(results)
-
-# Tool 2: Full document retrieval (Lines 308-354)
-@agent.tool
-async def retrieve_full_document(document_title: str) -> str:
-    """Retrieve complete document when chunks lack context."""
-    result = await db.query(
-        "SELECT title, content FROM documents WHERE title ILIKE %s",
-        f"%{document_title}%"
-    )
-    return f"**{result['title']}**\n\n{result['content']}"
-```
-
-**Example Flow**:
-```
-User: "What's the full refund policy?"
-Agent:
-  1. Calls search_knowledge_base("refund policy")
-  2. Finds chunks mentioning "refund_policy.pdf"
-  3. Calls retrieve_full_document("refund policy")
-  4. Returns complete document
-```
-
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#5-agentic-rag)
-- Pseudocode: [02_agentic_rag.py](examples/02_agentic_rag.py)
-- Research: [docs/02-agentic-rag.md](docs/02-agentic-rag.md)
+**Implementation**: [backend/graph/nodes/planner.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/planner.py)
 
 ---
 
@@ -331,8 +249,7 @@ async def search_knowledge_graph(query: str) -> str:
 **Framework**: [Graphiti from Zep](https://github.com/getzep/graphiti) - Temporal knowledge graphs for agents
 
 **See**:
-- Pseudocode: [03_knowledge_graphs.py](examples/03_knowledge_graphs.py)
-- Research: [docs/03-knowledge-graphs.md](docs/03-knowledge-graphs.md)
+**Implementation Note**: Knowledge Graphs are a planned expansion for v2.0.
 
 ---
 
@@ -390,12 +307,7 @@ Format: "This chunk from [title] discusses [explanation]." """
     return f"{context}\n\n{chunk}"
 ```
 
-**Enable with**: `python -m ingestion.ingest --documents ./docs --contextual`
-
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#7-contextual-retrieval)
-- Pseudocode: [04_contextual_retrieval.py](examples/04_contextual_retrieval.py)
-- Research: [docs/04-contextual-retrieval.md](docs/04-contextual-retrieval.md)
+**Native Implementation**: [backend/ingestion/processor.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/ingestion/processor.py)
 
 ---
 
@@ -446,10 +358,7 @@ Expand the query to be 2-3x more detailed while staying focused."""
 
 **Note**: This strategy returns ONE enriched query. For generating multiple query variations, see Multi-Query RAG (Strategy 6).
 
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#2-query-expansion)
-- Pseudocode: [05_query_expansion.py](examples/05_query_expansion.py)
-- Research: [docs/05-query-expansion.md](docs/05-query-expansion.md)
+**Native Implementation**: [backend/graph/nodes/rewriter.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/rewriter.py)
 
 ---
 
@@ -498,10 +407,7 @@ async def search_with_multi_query(query: str, limit: int = 5) -> str:
 - Parallel execution with `asyncio.gather()`
 - Smart deduplication (keeps best score per chunk)
 
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#3-multi-query-rag)
-- Pseudocode: [06_multi_query_rag.py](examples/06_multi_query_rag.py)
-- Research: [docs/06-multi-query-rag.md](docs/06-multi-query-rag.md)
+**Native Implementation**: [backend/graph/nodes/planner.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/planner.py) (Multi-query generation logic).
 
 ---
 
@@ -559,10 +465,7 @@ class DoclingHybridChunker:
 
 **Enabled by default during ingestion**
 
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#1-context-aware-chunking)
-- Pseudocode: [07_context_aware_chunking.py](examples/07_context_aware_chunking.py)
-- Research: [docs/07-context-aware-chunking.md](docs/07-context-aware-chunking.md)
+**Native Implementation**: [backend/ingestion/processor.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/ingestion/processor.py) (Integrated with Docling).
 
 ---
 
@@ -727,10 +630,7 @@ Suggest improved query. Respond with query only."""
     return format_results(results, note)
 ```
 
-**See**:
-- Full guide: [IMPLEMENTATION_GUIDE.md](implementation/IMPLEMENTATION_GUIDE.md#6-self-reflective-rag)
-- Pseudocode: [10_self_reflective_rag.py](examples/10_self_reflective_rag.py)
-- Research: [docs/10-self-reflective-rag.md](docs/10-self-reflective-rag.md)
+**Native Implementation**: [backend/graph/nodes/generate.py](file:///c:/Users/Nayan/Desktop/RAG_Chat_IPRv1.5/backend/graph/nodes/generate.py) (Adaptive Generation logic).
 
 ---
 

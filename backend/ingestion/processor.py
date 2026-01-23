@@ -23,25 +23,40 @@ class DocumentProcessor:
 
     def process_file(self, file_path: str) -> List[Dict[str, Any]]:
         """
-        Converts a file to chunks. 
+        Converts a file to chunks.
         Returns a list of dicts with 'text' and 'metadata'.
         """
+        filename = os.path.basename(file_path)
+        ext = os.path.splitext(filename)[1].lower()
+        
+        # Extension Whitelist (Docling + Fallbacks)
+        # We ignore system files (.gitkeep, .txt-placeholders) silently
+        if ext not in [".pdf", ".md", ".txt", ".docx", ".pptx", ".xlsx", ".html"]:
+            logger.debug(f"Skipping unsupported file format: {ext}")
+            return []
+
         logger.info(f"Processing file: {file_path}")
         try:
-            # Attempt 1: Full Pipeline (OCR + Tables)
-            result = self.converter.convert(file_path)
-            doc = result.document
-            
-            try:
-                md_content = doc.export_to_markdown()
-            except Exception as e:
-                logger.warning(f"Markdown export failed for {file_path}, falling back to raw text: {e}")
-                # Fallback: Just get raw text from all items
-                texts = []
-                for item, _ in doc.iterate_items():
-                    if hasattr(item, 'text'):
-                        texts.append(item.text)
-                md_content = "\n\n".join(texts)
+            # 🚀 PLATINUM FAST-PATH: Simple Text/Markdown
+            if ext in [".txt", ".md"]:
+                logger.info(f"Using fast-path for {ext} file.")
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    md_content = f.read()
+            else:
+                # Attempt 1: Full Pipeline (OCR + Tables)
+                result = self.converter.convert(file_path)
+                doc = result.document
+                
+                try:
+                    md_content = doc.export_to_markdown()
+                except Exception as e:
+                    logger.warning(f"Markdown export failed for {file_path}, falling back to raw text: {e}")
+                    # Fallback: Just get raw text from all items
+                    texts = []
+                    for item, _ in doc.iterate_items():
+                        if hasattr(item, 'text'):
+                            texts.append(item.text)
+                    md_content = "\n\n".join(texts)
                 
             if not md_content.strip():
                 raise ValueError("Extracted content is empty.")
@@ -88,28 +103,46 @@ class DocumentProcessor:
         # Simple chunking by iterating over texts for now
         # ... (rest of processing)
         
-        # Smarter Hierarchical Chunking
-        # We look for markdown headers to keep sections together
+        # Smarter Hierarchical Chunking (Platinum Implementation)
+        # We look for markdown headers to build a recursive breadcrumb path
         import re
         
-        # Split by H1, H2, or H3 headers but keep the headers in the chunks
-        header_pattern = r'(?m)^(#{1,3} .*)$'
+        # Split by H1 to H6 headers but keep the headers in the chunks
+        # Regex updated to support H6 and optional space after '#'
+        header_pattern = r'(?m)^(#{1,6}\s?.*)$'
         parts = re.split(header_pattern, md_content)
         
         raw_chunks = []
-        current_header = "Intro"
+        header_stack = [] # Tracks levels: [H1, H2, H3, H4, H5, H6]
+        current_path = "Intro"
         current_chunk = ""
         
+        def get_breadcrumb(stack):
+            return " > ".join(stack) if stack else "Intro"
+
         for part in parts:
             if not part.strip():
                 continue
             
-            # If it's a header, update the tracked header
+            # If it's a header, update the tracked header stack
             is_header = bool(re.match(header_pattern, part))
             if is_header:
+                # Save previous accumulated chunk before switching path
                 if current_chunk:
-                    raw_chunks.append(f"[Section: {current_header}]\n{current_chunk.strip()}")
-                current_header = part.strip().replace('#', '').strip()
+                    raw_chunks.append({
+                        "text": current_chunk.strip(),
+                        "path": current_path,
+                        "level": len(header_stack)
+                    })
+                
+                # Determine header level by counting '#'
+                level = part.count('#')
+                title = part.strip().lstrip('#').strip()
+                
+                # Update stack: keep parents, replace same-level or deeper
+                # Note: header_stack uses 0-indexing, level is 1-6
+                header_stack = header_stack[:level-1] + [title]
+                current_path = get_breadcrumb(header_stack)
                 current_chunk = ""
                 continue
 
@@ -126,22 +159,33 @@ class DocumentProcessor:
                 return chunks
 
             if len(part) > 2000:
-                # If we had a previous chunk, save it
+                # Save any existing chunk before split
                 if current_chunk:
-                    raw_chunks.append(f"[Section: {current_header}]\n{current_chunk.strip()}")
+                    raw_chunks.append({
+                        "text": current_chunk.strip(),
+                        "path": current_path,
+                        "level": len(header_stack)
+                    })
                 
-                # Split the large part
                 sub_chunks = split_text(part, 2000, 400)
                 for i, sc in enumerate(sub_chunks):
-                    if i < len(sub_chunks) - 1:
-                        raw_chunks.append(f"[Section: {current_header} (cont.)]\n{sc.strip()}")
-                    else:
-                        current_chunk = sc # Keep last sub-chunk for next iteration
+                    is_frag = i < len(sub_chunks) - 1
+                    raw_chunks.append({
+                        "text": sc.strip(),
+                        "path": current_path + (f" (Part {i+1})" if len(sub_chunks) > 1 else ""),
+                        "level": len(header_stack),
+                        "is_fragment": True if i > 0 else False
+                    })
+                current_chunk = "" # Reset after large split
             else:
-                # Normal accumulation
+                # Normal accumulation within current section
                 if len(current_chunk) + len(part) > 2000:
                     if current_chunk:
-                        raw_chunks.append(f"[Section: {current_header}]\n{current_chunk.strip()}")
+                        raw_chunks.append({
+                            "text": current_chunk.strip(),
+                            "path": current_path,
+                            "level": len(header_stack)
+                        })
                         overlap_text = current_chunk[-400:] if len(current_chunk) > 400 else current_chunk
                         current_chunk = overlap_text + "\n" + part
                     else:
@@ -150,18 +194,30 @@ class DocumentProcessor:
                     current_chunk += "\n" + part
         
         if current_chunk:
-            raw_chunks.append(f"[Section: {current_header}]\n{current_chunk.strip()}")
+            raw_chunks.append({
+                "text": current_chunk.strip(),
+                "path": current_path,
+                "level": len(header_stack)
+            })
             
         filename = os.path.basename(file_path)
         processed_chunks = []
         
-        for idx, text in enumerate(raw_chunks):
+        for idx, chunk_data in enumerate(raw_chunks):
+            # Platinum Prefix Injunction: [Doc: file | Path: path]
+            path = chunk_data["path"]
+            content = chunk_data["text"]
+            platinum_text = f"[Doc: {filename} | Path: {path}]\n{content}"
+            
             processed_chunks.append({
-                "text": text,
+                "text": platinum_text,
                 "metadata": {
                     "source": file_path,
                     "filename": filename,
-                    "chunk_index": idx
+                    "chunk_index": idx,
+                    "section_path": path,
+                    "header_level": chunk_data.get("level", 0),
+                    "is_fragment": chunk_data.get("is_fragment", False)
                 }
             })
         

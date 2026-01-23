@@ -68,11 +68,13 @@ The "glue" between these databases is the **`session_id`** and the **`filename`*
 
 ---
 
-## ⚡ Unified Maintenance: `rebuild_knowledge_base.py`
+## ⚡ Unified Maintenance: `embedding_debug.py`
 
-This script is the only place where both databases are cleared in tandem (optionally).
-- It performs a **Hard Reset** on ChromaDB by deleting the `chroma_db/` directory.
-- It refreshes the environment, allowing the **Session DB** (`rag_chat_sessions.db`) to stay intact (so you don't lose old chats) while starting fresh with the Knowledge Base.
+This script is the master utility for vector database health.
+- **`rebuild`**: Performs a **Hard Reset** on ChromaDB by clearing the collection and re-indexing all documents.
+- **`reindex`**: Allows for surgical updates to specific files while keeping the rest of the database intact.
+- **`.env` Synergy**: It strictly follows the configuration in your `.env`, ensuring that both databases (Meaning and Memory) remain synced to the same AI logic.
+- **Persistence**: While the Knowledge Base (ChromaDB) can be reset, your **Session DB** (`rag_chat_sessions.db`) is preserved, ensuring your conversation history remains available even after a KB rebuild.
 
 ---
 
@@ -86,4 +88,5 @@ By keeping them local and separated, your project achieves **High Speed** (Chrom
 
 ---
 
-✅ **Unified Database Status**: *Synchronized & Production-Grade*
+
+

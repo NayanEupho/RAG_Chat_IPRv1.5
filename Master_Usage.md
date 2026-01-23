@@ -79,25 +79,25 @@ Watch the AI's step-by-step reasoning (Analyzing → Searching → Generating) i
 
 ## 🛡 5. Professional Maintenance Suite
 
-Instead of manual folder deletion, use these high-fidelity utilities for system integrity:
+The `embedding_debug.py` tool is your unified "Swiss Army Knife" for vector database management. It replaces all legacy maintenance scripts with a single robust interface.
 
-### A. Total Reset (Fresh Start)
-If you switch embedding models or need a clean slate:
+### Standard Commands:
 ```bash
-python rebuild_knowledge_base.py
-```
-*   **Purge**: Physically wipes the vector DB.
-*   **Re-sync**: Automatically detects server settings and re-indexes `upload_docs/`.
+# A. Show current inventory and chunk counts
+uv run python embedding_debug.py list
 
-### B. Semantic Probing & Inventory
-To peek into the "mind" of the vector store:
-```bash
-# See all indexed files and chunk counts
-python kb_debug.py --inventory
+# B. Selective Re-index (From scratch re-processing for specific files)
+uv run python embedding_debug.py reindex "@MyDocument.pdf"
 
-# Test raw retrieval scores for a specific query
-python kb_debug.py --probe "your search query"
+# C. Semantic Probing (Test raw retrieval scores for a query)
+uv run python embedding_debug.py probe "system architecture"
+
+# D. Total Rebuild (Hard reset and fresh index of all documents)
+uv run python embedding_debug.py rebuild
 ```
+
+### 💡 Why use `reindex`?
+Unlike a full rebuild, `reindex` allows you to refresh a single document (fixing typos or updating content) without stopping the system or wiping the entire library. It performs a **from-scratch re-construction** (Docling Parsing → Hierarchical Chunking → Embedding) to ensure 100% system consistency.
 
 ---
 

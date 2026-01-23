@@ -1,112 +1,88 @@
-# 🛠️ Debugging & Monitoring Suite: Technical Guide
+# 🛠️ Debugging & Maintenance Suite: Unified Guide
 
-This document provides a comprehensive overview of the **Knowledge Base Maintenance Suite**. These utilities are designed to ensure your RAG (Retrieval-Augmented Generation) system remains high-fidelity, accurate, and manageable.
+This document provides a comprehensive overview of the **Unified Embedding Debug Manager** (`embedding_debug.py`). This tool is the single "Source of Truth" for maintaining, inspecting, and repairing the Knowledge Base (Vector Database).
 
 ---
 
-## 🏗️ Suite Architecture
+## 🏗️ Architecture
 
-The suite consists of two primary pillars: **Fresh Start Logic** and **Semantic Inspection**.
+The suite consolidates multiple legacy pillars into a single high-fidelity interface.
 
 ```mermaid
 graph TD
-    subgraph "Maintenance Layer"
-        R[rebuild_knowledge_base.py] -- "1. PURGE" --> DB[(ChromaDB)]
-        R -- "2. SCAN" --> Docs[upload_docs Folder]
-        R -- "3. EMBED" --> Ollama[Ollama Server]
-        R -- "4. SYNC" --> DB
+    subgraph "Unified Manager (embedding_debug.py)"
+        RE[reindex] -- "Atomic Logic" --> DB[(ChromaDB)]
+        RB[rebuild] -- "Hard Reset" --> DB
+        L[list] -- "Inventory" --> DB
+        P[probe] -- "Semantic Test" --> Ollama[Ollama Server]
     end
 
-    subgraph "Monitoring Layer"
-        D[kb_debug.py] -- "Inventory" --> DB
-        D -- "Probe" --> Ollama
-        Ollama -- "Vector" --> D
-        D -- "Similarity Search" --> DB
-    end
-
-    API[RAG API Server] -- "Active Config" --> R
+    API[RAG API Server] -- "/api/status" --> Manager[Manager]
     DB -- "Context" --> API
 ```
 
 ---
 
-## 🧹 1. Fresh Start Reset (`rebuild_knowledge_base.py`)
+## 🧹 1. Fresh Start Reset (`rebuild`)
 
-This utility is used when you want to "nuke" the existing database and start from a clean slate. It is essential when switching embedding models or resolving deep metadata corruption.
+Use this command when switching embedding models or resolving deep metadata corruption. It performs a "Hard Reset" of the system.
 
 ### ⚙️ How it works:
-1.  **Auto-Discovery**: It pings the running API at `localhost:8000` to detect your active **Host** and **Embedding Model**. This ensures your rebuild perfectly matches your UI settings.
-2.  **Hard Purge**: It physically deletes the `chroma_db` directory (`shutil.rmtree`). This removes all old shards, indexes, and legacy metadata.
-3.  **Recursive Ingestion**: It iterates through the `upload_docs` directory, utilizing the production-grade `DocumentProcessor` (Hierarchical + Section-aware chunking).
-4.  **Optimized Batching**: Chunks are sent to Ollama in optimized batches to maximize speed while preventing timeout errors.
+1.  **Config Detection**: Explicitly loads `.env` for host/model settings.
+2.  **Hard Purge**: Wipes the ChromaDB collection entirely.
+3.  **Noise Reduction**: Automatically ignores hidden files (`.gitkeep`) and temporary system files (`~$...`).
+4.  **Optimized Ingestion**: Triggers the **Docling** pipeline with batch-embedding for maximum speed.
 
 ### 🚀 Usage:
 ```bash
-python rebuild_knowledge_base.py
+uv run python embedding_debug.py rebuild
 ```
-
-### 📊 Terminal Output Example:
-| FILE | CHUNKS | STATUS |
-| :--- | :--- | :--- |
-| Policy_Manual.pdf | 42 | ✅ Indexed |
-| Tech_Specs.docx | 15 | ✅ Indexed |
-| corrupt_file.tmp | 0 | ⚠️ Skipped |
 
 ---
 
-## 🔍 2. System Inspector (`kb_debug.py`)
+## 🔄 2. Atomic Selective Re-indexing (`reindex`)
 
-The debugger provides transparency into the "Black Box" of vector retrieval.
+The most advanced maintenance feature. It allowing you to update specific files without wiping the entire library.
 
-### 📋 Inventory Mode (`--inventory`)
-Lists every document currently living in your vector database.
+### ⚙️ How it works:
+1.  **Atomic Deletion**: First, it identifies and deletes all existing chunks for the specified filename.
+2.  **Fresh Construction**: It re-processes the file from scratch using the full production pipeline, ensuring no duplicate or orphaned chunks remain.
 
-**What it exposes:**
-- **Chunk Density**: How many pieces a file was sliced into.
-- **Persistence Check**: Ensures the database actually contains what you think it does.
+### 🚀 Usage:
+```bash
+uv run python embedding_debug.py reindex path/to/document.pdf
+```
+
+---
+
+## 🔍 3. System Inspection (`list` & `probe`)
+
+### 📋 Inventory Mode (`list`)
+Lists every document in your vector database with accurate chunk counts.
 
 **Usage:**
 ```bash
-python kb_debug.py --inventory
+uv run python embedding_debug.py list
 ```
 
 ---
 
-### 🎯 Semantic Probe Mode (`--probe`)
-This is the most powerful tool for RAG debugging. It allows you to run a search query and see exactly what segments are being retrieved **before** they reach the LLM.
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Debugger as kb_debug.py
-    participant Ollama as Embedding Model
-    participant DB as ChromaDB
-
-    User->>Debugger: --probe "How does X work?"
-    Debugger->>Ollama: Convert text to Vector
-    Ollama-->>Debugger: [0.12, -0.98, 0.45, ...]
-    Debugger->>DB: Search for nearest neighbors
-    DB-->>Debugger: Top 3 Chunks + Distance Scores
-    Debugger->>User: Display Content + Filename + Similarity
-```
-
-**Why use it?**
-- **Distance Scores**: If the "Distance" is high (e.g., > 1.5), the retrieval is poor. You might need better documents or a different embedding model.
-- **Segment Inspection**: Check if your chunking strategy is cutting off important information mid-sentence.
+### 🎯 Semantic Probe Mode (`probe`)
+Allows you to run a search query and see the **raw chunks** and **distance scores** from ChromaDB before they reach the LLM.
 
 **Usage:**
 ```bash
-python kb_debug.py --probe "your search query here"
+uv run python embedding_debug.py probe "your search query"
 ```
 
 ---
 
-## 💡 Troubleshooting & Best Practices
+## 🛡️ Robustness Features
 
-1.  **API Consistency**: Always ensure your API server is running when you run the rebuild script. It helps the script "inherit" your preferred model settings (Set via `.env` or the Wizard).
-2.  **Space Handling**: If your filenames have spaces or special characters, the suite uses normalized metadata IDs to ensure they remain searchable.
-3.  **Memory Management**: If you are indexing 100+ documents, monitor your system RAM. The `kb_debug --inventory` command fetches all metadata into memory for the report.
-4.  **Proactive Health Checks**: The system now verifies both host ping AND model pull status. If `rebuild_knowledge_base.py` fails to start, verify your settings in the UI or `.env` and ensure the models are available on the specific hosts.
+1.  **Extension Whitelisting**: The system silently ignores unsupported file formats, preventing log noise.
+2.  **Fail-Fast Configuration**: If `.env` is misconfigured, the tool exits immediately with a diagnostic message rather than using silent local defaults.
+3.  **HPC Ready**: Designed to handle both local and remote (HPC) Ollama instances seamlessly.
 
 ---
-*Generated by Antigravity RAG Maintenance Engine v2.0*
+
+

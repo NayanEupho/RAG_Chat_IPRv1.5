@@ -76,6 +76,26 @@ class VectorStore:
         except Exception:
             return []
 
+    def delete_file(self, filename: str):
+        """Selectively removes all chunks associated with a specific filename."""
+        with self.lock:
+            # ChromaDB supports filtering for deletion
+            self.collection.delete(where={"filename": filename})
+        logger.info(f"[STORE] Deleted all embeddings for file: {filename}")
+
+    def clear_all(self):
+        """Wipes the entire collection for a complete system reset."""
+        with self.lock:
+            # We delete by empty filter or just delete all IDs if needed, 
+            # but PersistentClient.delete_collection is cleaner if we want a total wipe.
+            # However, keeping the collection object is better for active sessions.
+            # We get all IDs and delete them.
+            results = self.collection.get()
+            ids = results.get('ids', [])
+            if ids:
+                self.collection.delete(ids=ids)
+        logger.info("[STORE] Collection cleared. Vector database is now empty.")
+
 # Singleton
 _store = None
 

@@ -40,12 +40,20 @@ sequenceDiagram
     FS->>WD: New File Detected
     WD->>DP: Trigger Processing
     DP->>DP: Layout-Aware Parsing (Markdown)
-    DP->>DP: Hierarchical Chunking
+    DP->>DP: Platinum Recursive Chunking (H1-H6)
+    DP->>DP: Contextual Path Injunction
     DP->>LLM: Send Chunks for Embedding
-    LLM-->>DP: Return Vectors (Lists of Numbers)
-    DP->>CDB: collection.add(vectors, texts, metadata)
+    LLM-->>DP: Return Vectors
+    DP->>CDB: collection.add(vectors, texts, metadata[path, index, etc])
     CDB->>CDB: Persist to Segment Storage
 ```
+
+### 3.1 Platinum Metadata Schema
+For every chunk, we store a rich metadata envelope:
+- `section_path`: Full recursive breadcrumb (e.g., `Setup > Security`).
+- `chunk_index`: Sequence position for neighbor retrieval.
+- `header_level`: Depth (1-6).
+- `is_fragment`: Continuity bridge flag.
 
 ---
 
@@ -67,34 +75,31 @@ The Vector DB is a high-traffic "hub" in the project:
 
 | File | Role | Connection Type |
 | :--- | :--- | :--- |
-| **`backend/rag/store.py`** | The Interface | The primary Python wrapper for the database. |
-| **`backend/ingestion/processor.py`**| The Provider | Injects new data into ChromaDB. |
+| **`backend/rag/store.py`** | The Interface | The primary Python wrapper. Includes `.delete_file()` and `.clear_all()`. |
+| **`backend/ingestion/processor.py`**| The Provider | Injects new data. Includes Extension Whitelisting and Error Handling. |
 | **`backend/graph/nodes/retriever.py`**| The Consumer | Queries ChromaDB to find context for the LLM. |
-| **`kb_debug.py`** | The Investigator| Performs raw semantic probes to inspect embeddings. |
-| **`rebuild_knowledge_base.py`** | The Janitor | Performs a full "Hard Reset" (deletion) of the DB. |
+| **`embedding_debug.py`** | The Technician | Unified tool for rebuilding, re-indexing, and probing. |
 
 ---
 
 ## ⌨️ 6. Common Commands & Maintenance
 
-### How to Check the Database
-You can use `kb_debug.py` to see what is actually inside ChromaDB without using the GUI:
-```bash
-python kb_debug.py --inventory
-```
-*This lists all files currently "learned" by the system.*
+### How to Manage the Database
+The `embedding_debug.py` script is your primary maintenance interface:
 
-### How to Perform a "Semantic Probe"
-To see exactly what the AI retrieves for a query:
 ```bash
-python kb_debug.py --probe "Your query here"
-```
+# 1. See all indexed files and metrics
+uv run python embedding_debug.py list
 
-### How to Wipe the Database
-If your Knowledge Base becomes cluttered or stale:
-1. Stop the server.
-2. Delete the `chroma_db/` folder.
-3. Run `python rebuild_knowledge_base.py`.
+# 2. Test raw retrieval scores for a specific query
+uv run python embedding_debug.py probe "Your query here"
+
+# 3. Wipe and perform a from-scratch rebuild
+uv run python embedding_debug.py rebuild
+
+# 4. Refresh a specific file from scratch
+uv run python embedding_debug.py reindex "@MyDocument.pdf"
+```
 
 ---
 
@@ -107,4 +112,5 @@ Your implementation of ChromaDB isn't standard; it supports **Semantic @Mentions
 
 ---
 
-✅ **Vector Database Status**: *Optimized, Persistent, and Semantic-Aware.*
+
+

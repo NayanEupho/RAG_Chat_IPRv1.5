@@ -222,10 +222,27 @@ async def retrieve_documents(state: AgentState):
     
     logger.info(f"[RETRIEVER] Reranked to top {len(ranked_docs)} documents.")
 
-    # Format Final Results for the LLM context
+    # Format Final Results for the LLM context (Platinum Structured Manner)
+    import re
     final_retrieved = []
+    
     for d in ranked_docs:
-        source = d['metadata'].get('filename', 'Unknown')
-        final_retrieved.append(f"Source: {source}\nContent: {d['page_content']}")
+        meta = d['metadata']
+        filename = meta.get('filename', 'Unknown')
+        path = meta.get('section_path', 'Root')
+        raw_content = d['page_content']
+        
+        # Clean the "glued" prefix added during ingestion to ensure zero redundancy in the prompt
+        # The ingestion prefix is: "[Doc: {filename} | Path: {path}]\n"
+        content = re.sub(r'^\[Doc: .*? \| Path: .*?\]\n', '', raw_content)
+        
+        # Build the "Platinum Envelope" (Requirement Parity)
+        structured_segment = (
+            f"--- DOCUMENT SEGMENT ---\n"
+            f"Source: {filename}\n"
+            f"Section: {path}\n"
+            f"Content: {content}"
+        )
+        final_retrieved.append(structured_segment)
                  
     return {"documents": final_retrieved}

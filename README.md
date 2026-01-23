@@ -1,4 +1,4 @@
-# IPR RAG Chat v1.5
+# IPR RAG Chat v1.6.1
 
 A production-grade, modular, and agentic RAG (Retrieval-Augmented Generation) system. Built with **FastAPI**, **LangGraph**, **Ollama**, **Docling**, and **Next.js**.
 
@@ -45,9 +45,7 @@ graph TD
 *   **🧠 Unified Session Context**: 10-turn sliding memory window ensures the AI never loses context, even when switching interaction modes.
 *   **⚡ Adaptive Knowledge Injection**: The system intelligently decides *when* to inject documents into the prompt, reducing token noise and hallucinations.
 *   **📍 Semantic @Mentions**: Pinpoint exactly which files the AI should read by typing `@filename` directly in the chat.
-*   **🛡️ Performance Maintenance Suite**: Standalone tools for Knowledge Base integrity:
-    *   **[`rebuild_knowledge_base.py`](./rebuild_knowledge_base.py)**: Total DB reset with high-fidelity progress tracking.
-    *   **[`kb_debug.py`](./kb_debug.py)**: Semantic probing and inventory monitoring.
+*   **🛡️ Unified Maintenance Suite**: Single-command `embedding_debug.py` for total rebuilds, selective re-indexing, and semantic probing. Replacing all legacy scripts.
 *   **⚡ Dynamic Step Fusion**: Switchable architecture (`fused`/`modular`) that reduces latency by 60% using a single-shot "Planner" node for large models.
 *   **✂️ Brevity-First Strategy**: Default concise responses (< 4 sentences) for maximum efficiency, with automatic "Deep Dive" mode for detailed queries.
 *   **🛑 Master Stop Toggle**: A "Hard Stop" mechanism that halts both the UI stream and backend LLM processing instantly, preventing resource waste.
@@ -102,5 +100,6 @@ Visit **http://localhost:3000** to enter the Command Center.
     - [Vector Database (ChromaDB)](./Vector_Database_Encyclopedia.md)
     - [Session History (SQLite)](./Session_History_Encyclopedia.md)
 - [**Debugging & Monitoring**](./DEBUG_SUITE_GUIDE.md): Guide to the maintenance and probing utilities.
+- [**Embedding Manager Guide**](./Embedding_Manager_Guide.md): Specialized documentation for `embedding_debug.py`.
 - [**RAG Strategies**](./RAG%20Strategies.md): Technical breakdown of the ingestion and retrieval chain.
 - [**Usage Guides**](./Master_Usage.md): Setup and feature documentation for end-users.
