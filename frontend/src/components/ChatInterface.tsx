@@ -308,10 +308,22 @@ export default function ChatInterface() {
                                             {msg.sources && msg.sources.length > 0 && (
                                                 <div className="source-strip custom-scrollbar">
                                                     {msg.sources.map((src, i) => {
-                                                        const parts = src.split('\nContent: ');
-                                                        const sourceName = parts[0].replace('Source: ', '');
-                                                        const content = parts[1] || '';
+                                                        // Platinum Envelope Parsing
+                                                        // Structure: Source: ... \nSection: ... \nVisual: ... \nContent: ...
+
+                                                        const contentParts = src.split('\nContent: ');
+                                                        const metadataBlock = contentParts[0];
+                                                        const content = contentParts[1] || '';
+
+                                                        // Extract fields
+                                                        const sourceMatch = metadataBlock.match(/Source: (.*?)(?:\n|$)/);
+                                                        const sectionMatch = metadataBlock.match(/Section: (.*?)(?:\n|$)/);
+                                                        const visualMatch = metadataBlock.match(/Visual: (.*?)(?:\n|$)/);
+
+                                                        const sourceName = sourceMatch ? sourceMatch[1].trim() : 'Unknown Source';
                                                         const displayTitle = sourceName.split('/').pop() || sourceName;
+
+                                                        const visualTag = visualMatch ? visualMatch[1] : null;
                                                         const isTargeted = msg.targeted_docs?.some(d => sourceName.includes(d));
 
                                                         return (
@@ -325,7 +337,10 @@ export default function ChatInterface() {
                                                                 <div className="source-badge" style={isTargeted ? { background: 'var(--accent-secondary)' } : {}}>{i + 1}</div>
                                                                 <div className="source-card-header">
                                                                     <FileText size={12} />
-                                                                    <div className="source-card-title" style={isTargeted ? { fontWeight: 700 } : {}}>{displayTitle}</div>
+                                                                    <div className="source-card-title" style={isTargeted ? { fontWeight: 700 } : {}}>
+                                                                        {displayTitle}
+                                                                        {visualTag && <span style={{ marginLeft: '6px', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(255,255,255,0.1)', color: 'var(--accent-secondary)' }}>{visualTag.split(']')[0] + ']'}</span>}
+                                                                    </div>
                                                                 </div>
                                                                 <div className="source-card-preview">
                                                                     {content.substring(0, 100)}...
