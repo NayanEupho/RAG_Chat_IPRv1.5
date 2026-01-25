@@ -236,11 +236,25 @@ async def retrieve_documents(state: AgentState):
         # The ingestion prefix is: "[Doc: {filename} | Path: {path}]\n"
         content = re.sub(r'^\[Doc: .*? \| Path: .*?\]\n', '', raw_content)
         
-        # Build the "Platinum Envelope" (Requirement Parity)
+        # Check for visual element metadata
+        has_visual = meta.get('has_visual', False)
+        visual_type = meta.get('visual_type')
+        visual_title = meta.get('visual_title')
+        
+        # Build the "Platinum Envelope" with visual metadata (when present)
+        visual_line = ""
+        if has_visual and visual_type:
+            visual_tag = visual_type.upper()  # DIAGRAM, TABLE, CHART
+            if visual_title:
+                visual_line = f"Visual: [{visual_tag}] {visual_title}\n"
+            else:
+                visual_line = f"Visual: [{visual_tag}]\n"
+        
         structured_segment = (
             f"--- DOCUMENT SEGMENT ---\n"
             f"Source: {filename}\n"
             f"Section: {path}\n"
+            f"{visual_line}"
             f"Content: {content}"
         )
         final_retrieved.append(structured_segment)

@@ -1,66 +1,87 @@
 # Document Processing & Ingestion Pipeline (Platinum Edition)
 
-This document provides a technical deep-dive into how RAG Chat IPR v1.6 transforms raw files into a "Smart Knowledge Base."
+This document provides a technical deep-dive into how RAG Chat IPR v1.7 transforms raw files into a "Smart Knowledge Base."
 
 ## 1. Multi-Stage Ingestion Flow
+
 The ingestion process is triggered by the `WatchdogService` (in `watcher.py`) or manually via the `Unified Debug Manager` (`embedding_debug.py`).
 
-### Step A: High-Fidelity Conversion (Docling & Fast-Path)
-We use a dual-pipeline approach to ensure maximum speed and accuracy:
-1. **Platinum Fast-Path (.txt, .md)**: Simple text and markdown files are read directly using native IO. This skips heavy layout analysis, resulting in **10x faster ingestion** for knowledge-dense text files.
-2. **Structural Conversion (Docling)**: Complex formats (PDF, DOCX, PPTX, etc.) use the **IBM Docling** engine in `processor.py`.
-   - **OCR Integration**: If a PDF contains images of text, Docling uses OCR to extract it.
-   - **Table Preservation**: Tables are converted into standard Markdown tables (`| Col 1 | Col 2 |`) to ensure the LLM maintains structural awareness of tabular data.
+### Step A: OCR Engine Selection
 
-### Step B: Recursive Hierarchical Chunking (Platinum)
-Unlike static chunking, our system uses a **Recursive Header Stack** to track the document's structure during processing.
+| Engine | When Used | Features |
+| :--- | :--- | :--- |
+| **Docling (Default)** | `RAG_VLM_MODEL="False"` | Fast, good for digital PDFs |
+| **DeepSeek VLM** | `RAG_VLM_MODEL="deepseek-ocr:3b"` | High-fidelity for scanned docs |
+
+### Step B: High-Fidelity Conversion
+
+1. **Platinum Fast-Path (.txt, .md)**: Simple text and markdown files are read directly using native IO. This skips heavy layout analysis, resulting in **10x faster ingestion**.
+
+2. **Docling Pipeline (PDF, DOCX, etc.)**: Uses IBM Docling engine with OCR and table preservation.
+
+3. **DeepSeek VLM Pipeline (PDFs)**: Two-pass vision extraction:
+   - **Pass 1 (Grounding)**: Extracts document structure, tables, headers
+   - **Pass 2 (Describe)**: Auto-detects unlabeled visuals and adds descriptions
+
+### Step C: Visual-Aware Hierarchical Chunking
 
 1. **Header Tracking**: The parser identifies headers (`#` to `######`).
-2. **Breadcrumb Generation**: It maintains a stack of headers to create a "path" for every chunk.
+2. **Breadcrumb Generation**: Maintains a stack of headers for path generation.
    - Example: `Networking > Security > Port Rules`.
-3. **Recursive Splitting**: If a section is larger than 2000 characters, it is recursively split into sub-chunks with a 400-character overlap.
-4. **Contextual Prefix (Injunction)**: Every chunk is physically prefixed with its document and section identity *before* embedding.
+3. **Visual Boundary Protection**: Tables and figures are kept intact during chunking.
+4. **Recursive Splitting**: Large sections split with 400-character overlap.
+5. **Contextual Prefix**: Every chunk is prefixed with identity:
    ```text
    [Doc: manual.pdf | Path: Maintenance > Recovery]
    The following steps reset the server...
    ```
 
-## 2. Batch Embedding & Storage
-Once chunks are generated, they are vectorized in batches (size: 50) using the configured Ollama embedding model (e.g., `embeddinggemma:300m`).
+## 2. Visual Element Detection
 
-### ChromaDB Data Structure
-Each embedding is stored in ChromaDB alongside a rich metadata payload:
+DeepSeek OCR detects and extracts visual elements:
+
+| Type | Pattern | Stored As |
+| :--- | :--- | :--- |
+| `diagram` | `Figure X:`, `Fig. X:` | `visual_type: "diagram"` |
+| `table` | Markdown tables, `Table X:` | `visual_type: "table"` |
+| `chart` | `Diagram X:`, `Chart X:` | `visual_type: "chart"` |
+| `image` | DeepSeek `> [Image: ...]` | `visual_type: "image"` |
+
+## 3. ChromaDB Metadata Schema
+
 | Key | Type | Description |
 | :--- | :--- | :--- |
-| `filename` | String | Base name of the file. |
-| `source` | String | Full absolute path for traceability. |
-| `chunk_index` | Integer | Sequential ID used for neighbor retrieval (Sliding Window). |
-| `section_path` | String | The recursive breadcrumb (e.g., `A > B > C`). |
-| `header_level` | Integer | Depth of the section (1 for H1, 6 for H6). |
-| `is_fragment` | Boolean | True if the chunk is a continuation of a larger section. |
+| `filename` | String | Base name of the file |
+| `source` | String | Full absolute path |
+| `chunk_index` | Integer | Sequential ID for neighbor retrieval |
+| `section_path` | String | Recursive breadcrumb (`A > B > C`) |
+| `header_level` | Integer | Depth of section (1-6) |
+| `is_fragment` | Boolean | True if continuation of larger section |
+| `has_visual` | Boolean | True if chunk contains visual elements |
+| `visual_type` | String | `diagram`, `table`, `chart`, `image`, or null |
+| `visual_title` | String | Caption/description of visual |
+| `visual_count` | Integer | Number of visuals in chunk |
 
-## 3. Platinum Retrieval & Prompt Engineering
-When a user asks a query, the **Retriever Node** performs three specific actions to maximize the "Intelligence" of the result:
+## 4. Platinum Retrieval & Prompt Engineering
 
 ### A. Semantic Search + Sliding Window
-1. The system finds the top matches based on cosine similarity.
-2. For every match, it automatically fetches the **Preceding (-1)** and **Succeeding (+1)** chunks using the `chunk_index` metadata. This prevents "Choppy" answers.
+1. Top matches by cosine similarity
+2. Preceding (-1) and Succeeding (+1) chunks fetched for context
 
-### B. Super-Structured Prompting
-The retrieved chunks are formatted into a "Platinum Envelope" before being appended to the `AgentState`. This structure ensures the LLM understands exactly where each piece of info originates.
+### B. Super-Structured Prompting (Platinum Envelope)
 
-**The prompt-block data structure:**
 ```markdown
 --- DOCUMENT SEGMENT ---
 Source: Security_Policy.pdf
 Section: Setup > Firewall > Port Rules
+Visual: [DIAGRAM] Fig. 3 - Network Topology
 Content:
-The following ports must be opened for the DevOps agent...
+The following diagram shows the network architecture...
 ```
 
 ### C. LLM Integration
-These segments are injected into the `<knowledge_base>` tag in the final prompt. The LLM then uses this structured data to generate an answer with precise citations like: 
-> "According to the Security_Policy.pdf (Section: Setup > Firewall), port 8080 must be open."
+Segments are injected into `<knowledge_base>` tags. The LLM generates citations like:
+> "According to Security_Policy.pdf (Section: Setup > Firewall), port 8080 must be open."
 
 ---
-*Last Updated: January 2026 for RAG Chat IPR v1.6*
+*Last Updated: January 2026 for RAG Chat IPR v1.7*

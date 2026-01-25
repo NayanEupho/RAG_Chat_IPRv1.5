@@ -31,6 +31,11 @@ def main():
     os.environ["RAG_EMBED_HOST"] = config.embedding_model.host
     os.environ["RAG_EMBED_MODEL"] = config.embedding_model.model_name
     
+    # VLM config (optional - only if configured)
+    if config.vlm_model:
+        os.environ["RAG_VLM_HOST"] = config.vlm_model.host
+        os.environ["RAG_VLM_MODEL"] = config.vlm_model.model_name
+    
     # We run uvicorn programmatically
     uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)
 

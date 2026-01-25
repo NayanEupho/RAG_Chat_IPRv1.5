@@ -6,7 +6,7 @@ from rich.live import Live
 from rich import box
 import ollama
 import time
-from backend.config import set_main_model, set_embedding_model
+from backend.config import set_main_model, set_embedding_model, set_vlm_model
 
 console = Console()
 
@@ -106,6 +106,15 @@ def check_for_env_config() -> bool:
         print_var("Embed Host: ", env_vars['RAG_EMBED_HOST'])
         print_var("Embed Model:", env_vars['RAG_EMBED_MODEL'])
         
+        # Display VLM config if present
+        vlm_model = env_vars.get('RAG_VLM_MODEL', 'False')
+        if vlm_model.lower() not in ['false', '0', 'no', 'off', '']:
+            print_var("VLM Host:   ", env_vars.get('RAG_VLM_HOST', 'N/A'))
+            print_var("VLM Model:  ", vlm_model)
+        else:
+            console.print("[dim]VLM OCR:     Disabled (using Docling)[/dim]")
+
+        
         if Confirm.ask("\nImport settings from .env and skip wizard?", default=True):
             # NEW: Post-Confirmation Validation
             main_ok = validate_model_on_host(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'], "Main (Chat)")
@@ -114,9 +123,18 @@ def check_for_env_config() -> bool:
             if main_ok and embed_ok:
                 set_main_model(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'])
                 set_embedding_model(env_vars['RAG_EMBED_HOST'], env_vars['RAG_EMBED_MODEL'])
+                
+                # Set VLM config if present
+                vlm_model = env_vars.get('RAG_VLM_MODEL', 'False')
+                if vlm_model.lower() not in ['false', '0', 'no', 'off', '']:
+                    vlm_host = env_vars.get('RAG_VLM_HOST', '')
+                    if vlm_host:
+                        set_vlm_model(vlm_host, vlm_model)
+                
                 console.print("[bold green]Configuration Loaded from .env and Verified![/bold green]")
                 time.sleep(1) # Visual feedback
                 return True
+
             else:
                 console.print("[bold yellow]\n⚠️ .env Validation failed. Falling back to Configuration Wizard...[/bold yellow]")
                 time.sleep(2)

@@ -1,4 +1,4 @@
-# IPR RAG Chat v1.6.1
+# IPR RAG Chat v1.7
 
 A production-grade, modular, and agentic RAG (Retrieval-Augmented Generation) system. Built with **FastAPI**, **LangGraph**, **Ollama**, **Docling**, and **Next.js**.
 
@@ -29,8 +29,11 @@ graph TD
 
     subgraph "Core Engines"
         Files[(upload_docs/)] --> Watcher[Watchdog]
-        Watcher --> Proc[Docling Processor]
-        Proc --> DB[(ChromaDB)]
+        Watcher --> Proc{VLM or Docling?}
+        Proc -->|VLM| Vision[DeepSeek OCR]
+        Proc -->|Docling| DocProc[Docling Processor]
+        Vision --> DB[(ChromaDB)]
+        DocProc --> DB
         Gen -- "Local LLM" --> Ollama[Ollama]
     end
 
@@ -39,19 +42,21 @@ graph TD
 
 ---
 
-## 🌟 New Features (v1.5)
+## 🌟 New Features (v1.7)
 
-*   **🕹️ Intelligence Mode Selector**: Seamlessly switch between **Auto** (Smart Intent Detection), **RAG** (Strict Knowledge Base), and **Chat** (Pure LLM) modes.
-*   **🧠 Unified Session Context**: 10-turn sliding memory window ensures the AI never loses context, even when switching interaction modes.
-*   **⚡ Adaptive Knowledge Injection**: The system intelligently decides *when* to inject documents into the prompt, reducing token noise and hallucinations.
-*   **📍 Semantic @Mentions**: Pinpoint exactly which files the AI should read by typing `@filename` directly in the chat.
-*   **🛡️ Unified Maintenance Suite**: Single-command `embedding_debug.py` for total rebuilds, selective re-indexing, and semantic probing. Replacing all legacy scripts.
-*   **⚡ Dynamic Step Fusion**: Switchable architecture (`fused`/`modular`) that reduces latency by 60% using a single-shot "Planner" node for large models.
-*   **✂️ Brevity-First Strategy**: Default concise responses (< 4 sentences) for maximum efficiency, with automatic "Deep Dive" mode for detailed queries.
-*   **🛑 Master Stop Toggle**: A "Hard Stop" mechanism that halts both the UI stream and backend LLM processing instantly, preventing resource waste.
-*   **📑 Hierarchical RAG**: Section-aware chunking preserves the relationship between headers and body text for surgical accuracy.
-*   **🩺 Proactive Health Probing**: Real-time monitoring of Ollama hosts and model availability ensures zero-latency failure detection.
-*   **💎 Premium Glassmorphic UI**: High-speed interface featuring live thinking states, source-strip transparency, and buttery animations.
+*   **🔬 DeepSeek VLM OCR**: High-fidelity vision-based extraction for scanned PDFs and complex layouts.
+*   **🎯 Two-Pass Extraction**: Auto-detects unlabeled images and adds AI-generated descriptions.
+*   **📊 Visual-Aware Chunking**: Tables and diagrams are protected from fragmentation during chunking.
+*   **🖼️ Visual Metadata**: Chunks tagged with `has_visual`, `visual_type`, and `visual_title` for smarter retrieval.
+*   **⚙️ Configurable VLM Prompts**: Choose between `auto`, `grounding`, `describe`, and `parse_figure` modes.
+*   **🕹️ Intelligence Mode Selector**: Seamlessly switch between **Auto**, **RAG**, and **Chat** modes.
+*   **🧠 Unified Session Context**: 10-turn sliding memory window ensures the AI never loses context.
+*   **⚡ Dynamic Step Fusion**: Switchable architecture (`fused`/`modular`) reduces latency by 60%.
+*   **✂️ Brevity-First Strategy**: Default concise responses with automatic "Deep Dive" mode.
+*   **🛑 Master Stop Toggle**: Halts both UI stream and backend LLM processing instantly.
+*   **📑 Hierarchical RAG**: Section-aware chunking preserves header-body relationships.
+*   **💎 Premium Glassmorphic UI**: High-speed interface with live thinking states and buttery animations.
+
 
 ## 🛠 Tech Stack
 
@@ -96,6 +101,8 @@ Visit **http://localhost:3000** to enter the Command Center.
 ## 📖 Component Deep-Dives
 - [**Architecture & Orchestration**](./Architecture_Guide.md): Detailed logic mapping of the LangGraph nodes.
 - [**API Server Encyclopedia**](./API_Server_Guide.md): Deep dive into FastAPI, SSE, and Request Lifecycles.
+- [**VLM OCR Pipeline**](./VL_OCR_Implementation_Plan.md): DeepSeek vision extraction and two-pass processing.
+- [**Document Processing**](./doc_processing.md): Chunking strategies, visual metadata, and Platinum Envelope format.
 - [**Database Encyclopedia Suite**](./Unified_Database_Guide.md): 
     - [Vector Database (ChromaDB)](./Vector_Database_Encyclopedia.md)
     - [Session History (SQLite)](./Session_History_Encyclopedia.md)
@@ -103,3 +110,4 @@ Visit **http://localhost:3000** to enter the Command Center.
 - [**Embedding Manager Guide**](./Embedding_Manager_Guide.md): Specialized documentation for `embedding_debug.py`.
 - [**RAG Strategies**](./RAG%20Strategies.md): Technical breakdown of the ingestion and retrieval chain.
 - [**Usage Guides**](./Master_Usage.md): Setup and feature documentation for end-users.
+

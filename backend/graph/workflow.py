@@ -15,12 +15,13 @@ def build_graph():
     # Define Edges
     
     # DYNAMIC WORKFLOW SWITCH
-    from backend.config import AppConfig
-    config = AppConfig()
+    from backend.config import get_config
+    config = get_config()
     
     # MODE 1: FUSED (One-Shot Planner)
     # Optimized for Speed (Low Latency). Requires 72B+ Model.
     if config.rag_workflow == "fused":
+
         logger.info("[WORKFLOW] Mode: FUSED (Planner -> Retriever)")
         
         # Add Planner Node

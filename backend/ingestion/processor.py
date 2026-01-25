@@ -4,13 +4,18 @@ from docling.document_converter import PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 import logging
 import os
+import asyncio
 from typing import List, Dict, Any
+
+from backend.config import get_config
+from backend.ingestion.markdown_sanitizer import detect_visual_elements
 
 logger = logging.getLogger("rag_chat_ipr.processor")
 
+
 class DocumentProcessor:
     def __init__(self):
-        # Configure Docling
+        # Configure Docling (default OCR engine)
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = True 
         pipeline_options.do_table_structure = True
@@ -20,12 +25,32 @@ class DocumentProcessor:
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
             }
         )
+        
+        # Vision handler is lazy-loaded only when needed
+        self._vision_handler = None
+    
+    def _get_vision_handler(self):
+        """Lazy-load VisionHandler to avoid import overhead when not using deepseek."""
+        if self._vision_handler is None:
+            from backend.ingestion.vision_handler import VisionHandler
+            self._vision_handler = VisionHandler()
+        return self._vision_handler
+    
+    async def _extract_with_vision(self, file_path: str) -> str:
+        """Extract markdown using DeepSeek OCR vision pipeline."""
+        handler = self._get_vision_handler()
+        return await handler.process_pdf_with_vision(file_path)
 
     def process_file(self, file_path: str) -> List[Dict[str, Any]]:
         """
         Converts a file to chunks.
         Returns a list of dicts with 'text' and 'metadata'.
+        
+        OCR Engine Selection (via .env):
+        - RAG_VLM_MODEL="False": (default) Uses Docling text-based extraction
+        - RAG_VLM_MODEL="deepseek-ocr:3b": Uses VLM OCR for high-fidelity extraction
         """
+
         filename = os.path.basename(file_path)
         ext = os.path.splitext(filename)[1].lower()
         
@@ -36,14 +61,36 @@ class DocumentProcessor:
             return []
 
         logger.info(f"Processing file: {file_path}")
+        
+        # Get configuration
+        config = get_config()
+        
         try:
             # 🚀 PLATINUM FAST-PATH: Simple Text/Markdown
             if ext in [".txt", ".md"]:
                 logger.info(f"Using fast-path for {ext} file.")
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     md_content = f.read()
+            
+            # 🔬 VISION PATH: VLM OCR for PDFs (when enabled)
+            elif ext == ".pdf" and config.is_vlm_enabled:
+                logger.info(f"[VLM] Using VLM OCR engine ({config.vlm_model.model_name}) for {filename}")
+                
+                # Run async vision extraction in sync context
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    md_content = loop.run_until_complete(self._extract_with_vision(file_path))
+                finally:
+                    loop.close()
+                
+                # Apply conservative sanitization
+                from backend.ingestion.markdown_sanitizer import sanitize_markdown
+                md_content = sanitize_markdown(md_content)
+                
             else:
-                # Attempt 1: Full Pipeline (OCR + Tables)
+
+                # Default: Docling Pipeline (OCR + Tables)
                 result = self.converter.convert(file_path)
                 doc = result.document
                 
@@ -60,6 +107,7 @@ class DocumentProcessor:
                 
             if not md_content.strip():
                 raise ValueError("Extracted content is empty.")
+
                 
         except Exception as e:
             logger.warning(f"Full pipeline failed for {file_path}: {e}")
@@ -147,16 +195,90 @@ class DocumentProcessor:
                 continue
 
             # If the part itself is very large, we must split it recursively
-            def split_text(text, max_size, overlap):
+            # Visual-Boundary-Aware Splitting: Prevents fragmentation of tables/figures
+            def detect_visual_blocks(text):
+                """
+                Detect visual elements (tables, figures) and return their spans.
+                Returns list of (start, end) tuples for visual blocks.
+                """
+                import re
+                visual_spans = []
+                
+                # Detect markdown tables (| --- | format)
+                # Match from first | to last | in a table block
+                table_pattern = re.compile(
+                    r'(\|[^\n]+\|\n)+',  # Consecutive lines starting and ending with |
+                    re.MULTILINE
+                )
+                for match in table_pattern.finditer(text):
+                    visual_spans.append((match.start(), match.end()))
+                
+                # Detect figure captions and their descriptions
+                # Figure X: ... or Fig. X: ... followed by content until next header or double newline
+                figure_pattern = re.compile(
+                    r'((?:Figure|Fig\.?)\s*\d+[:\-.].*?)(?=\n\n|\n#|$)',
+                    re.IGNORECASE | re.DOTALL
+                )
+                for match in figure_pattern.finditer(text):
+                    # Avoid overlapping with tables
+                    if not any(s <= match.start() < e for s, e in visual_spans):
+                        visual_spans.append((match.start(), match.end()))
+                
+                return sorted(visual_spans, key=lambda x: x[0])
+            
+            def split_text_visual_aware(text, max_size, overlap):
+                """
+                Split text while respecting visual block boundaries.
+                Visual blocks are kept intact even if slightly larger than max_size.
+                """
+                visual_spans = detect_visual_blocks(text)
                 chunks = []
                 start = 0
+                prev_start = -1  # Track previous position for infinite loop guard
+                
                 while start < len(text):
                     end = start + max_size
-                    chunks.append(text[start:end])
+                    
+                    # Check if we're about to split inside a visual block
+                    for v_start, v_end in visual_spans:
+                        # If end falls within a visual block, extend to include the whole block
+                        if v_start < end < v_end:
+                            end = v_end
+                            break
+                        # If start falls within a visual block, include the whole block
+                        if v_start < start < v_end:
+                            start = v_start
+                            end = max(end, v_end)
+                            break
+                    
+                    # Ensure we don't exceed text length
+                    end = min(end, len(text))
+                    
+                    chunk_text = text[start:end]
+                    if chunk_text.strip():
+                        chunks.append(chunk_text)
+                    
                     if end >= len(text):
                         break
-                    start = end - overlap
-                return chunks
+                    
+                    # Apply overlap, but don't go back into a visual block
+                    new_start = end - overlap
+                    # Ensure we don't start in the middle of a visual block
+                    for v_start, v_end in visual_spans:
+                        if v_start < new_start < v_end:
+                            new_start = v_end  # Start after the visual block
+                            break
+                    
+                    start = max(new_start, end - overlap)
+                    # Guard against infinite loop
+                    if start <= prev_start:
+                        start = end  # Force progress
+                    if start >= len(text):
+                        break
+                    prev_start = start
+
+                
+                return chunks if chunks else [text]
 
             if len(part) > 2000:
                 # Save any existing chunk before split
@@ -167,7 +289,8 @@ class DocumentProcessor:
                         "level": len(header_stack)
                     })
                 
-                sub_chunks = split_text(part, 2000, 400)
+                # Use visual-aware splitting
+                sub_chunks = split_text_visual_aware(part, 2000, 400)
                 for i, sc in enumerate(sub_chunks):
                     is_frag = i < len(sub_chunks) - 1
                     raw_chunks.append({
@@ -177,6 +300,7 @@ class DocumentProcessor:
                         "is_fragment": True if i > 0 else False
                     })
                 current_chunk = "" # Reset after large split
+
             else:
                 # Normal accumulation within current section
                 if len(current_chunk) + len(part) > 2000:
@@ -209,6 +333,9 @@ class DocumentProcessor:
             content = chunk_data["text"]
             platinum_text = f"[Doc: {filename} | Path: {path}]\n{content}"
             
+            # Detect visual elements in this chunk
+            visual_info = detect_visual_elements(content)
+            
             processed_chunks.append({
                 "text": platinum_text,
                 "metadata": {
@@ -217,9 +344,15 @@ class DocumentProcessor:
                     "chunk_index": idx,
                     "section_path": path,
                     "header_level": chunk_data.get("level", 0),
-                    "is_fragment": chunk_data.get("is_fragment", False)
+                    "is_fragment": chunk_data.get("is_fragment", False),
+                    # Visual element metadata
+                    "has_visual": visual_info.get("has_visual", False),
+                    "visual_type": visual_info.get("visual_type"),
+                    "visual_title": visual_info.get("visual_title"),
+                    "visual_count": visual_info.get("visual_count", 0)
                 }
             })
+
         
         logger.info(f"Successfully processed {filename} into {len(processed_chunks)} hierarchical chunks.")
         return processed_chunks
