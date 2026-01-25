@@ -6,7 +6,7 @@ from rich.live import Live
 from rich import box
 import ollama
 import time
-from backend.config import set_main_model, set_embedding_model, set_vlm_model
+from backend.config import set_main_model, set_embedding_model, set_vlm_model, set_rag_workflow
 
 console = Console()
 
@@ -230,15 +230,50 @@ def run_interactive_config():
             
             embed_model, embed_host = get_and_select_model(embed_host_initial, "Embedding")
 
-            # 3. Confirmation
+            # 3. RAG Workflow Strategy
+            console.print("\n[bold yellow]RAG Workflow Strategy[/bold yellow]")
+            console.print("1. [cyan]Fused[/cyan] (Default): Faster, 1 LLM call. Requires smart model (70B+).")
+            console.print("2. [cyan]Modular[/cyan] (Legacy): More stable, 3 sequential calls. Good for smaller models.")
+            workflow_choice = Prompt.ask("Select Strategy", choices=["1", "2"], default="1")
+            rag_workflow = "fused" if workflow_choice == "1" else "modular"
+
+            # 4. VLM OCR Configuration
+            console.print("\n[bold yellow]Vision-Language Model (VLM) for OCR[/bold yellow]")
+            use_vlm = Confirm.ask("Enable DeepSeek-OCR for complex PDFs (Tables/Figures)?", default=False)
+            
+            vlm_model = "False"
+            vlm_host = ""
+            
+            if use_vlm:
+                # Ask if they want to reuse an existing host
+                use_main_host = Confirm.ask(f"Use Main Host ({main_host}) for VLM?", default=True)
+                if use_main_host:
+                    vlm_host_initial = main_host
+                else:
+                    vlm_host_initial = select_host("VLM Host")
+                
+                vlm_model, vlm_host = get_and_select_model(vlm_host_initial, "VLM (OCR)")
+
+            # 5. Confirmation
             console.print("\n[bold white on black] Selected Configuration [/bold white on black]")
             console.print(f"Main Model (Chat):      [cyan]{main_model}[/cyan] @ [yellow]{main_host}[/yellow]")
             console.print(f"Embedding Model (RAG):  [cyan]{embed_model}[/cyan] @ [yellow]{embed_host}[/yellow]")
+            console.print(f"RAG Workflow:           [magenta]{rag_workflow.upper()}[/magenta]")
+            if use_vlm:
+                console.print(f"VLM OCR Model:          [cyan]{vlm_model}[/cyan] @ [yellow]{vlm_host}[/yellow]")
+            else:
+                console.print(f"VLM OCR Model:          [dim]Disabled[/dim]")
             
             if Confirm.ask("\nContinue with this configuration?", default=True):
                 # Apply Configuration
                 set_main_model(main_host, main_model)
                 set_embedding_model(embed_host, embed_model)
+                set_rag_workflow(rag_workflow)
+                if use_vlm:
+                    set_vlm_model(vlm_host, vlm_model)
+                else:
+                    set_vlm_model("", "False")
+                    
                 console.print("[bold green]Configuration Applied![/bold green]")
                 break
             else:

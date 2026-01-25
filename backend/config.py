@@ -105,6 +105,12 @@ def set_vlm_model(host: str, model: str):
     else:
         _runtime_config.vlm_model = OllamaConfig(host=host, model_name=model)
 
-def set_vlm_prompt(prompt: str):
     """Set VLM prompt strategy (auto, grounding, describe, parse_figure)."""
     _runtime_config.vlm_prompt = prompt.lower()
+
+def set_rag_workflow(mode: str):
+    """Set RAG workflow mode (fused or modular)."""
+    if mode.lower() in ["fused", "modular"]:
+        _runtime_config.rag_workflow = mode.lower()
+    else:
+        _runtime_config.rag_workflow = "modular"  # Default safe mode

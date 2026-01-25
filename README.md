@@ -45,13 +45,14 @@ graph TD
 ## 🌟 New Features (v1.7)
 
 *   **🔬 DeepSeek VLM OCR**: High-fidelity vision-based extraction for scanned PDFs and complex layouts.
+*   **🧙‍♂️ Interactive Startup Wizard**: Zero-config launch with interactive prompts for Host, Model, and Strategy selection.
+*   **⚡ Dynamic RAG Workflow**: Choose between **Fused Strategy** (Speed/Planner) and **Modular Strategy** (Depth/Router) at runtime.
 *   **🎯 Two-Pass Extraction**: Auto-detects unlabeled images and adds AI-generated descriptions.
 *   **📊 Visual-Aware Chunking**: Tables and diagrams are protected from fragmentation during chunking.
 *   **🖼️ Visual Metadata**: Chunks tagged with `has_visual`, `visual_type`, and `visual_title` for smarter retrieval.
 *   **⚙️ Configurable VLM Prompts**: Choose between `auto`, `grounding`, `describe`, and `parse_figure` modes.
 *   **🕹️ Intelligence Mode Selector**: Seamlessly switch between **Auto**, **RAG**, and **Chat** modes.
 *   **🧠 Unified Session Context**: 10-turn sliding memory window ensures the AI never loses context.
-*   **⚡ Dynamic Step Fusion**: Switchable architecture (`fused`/`modular`) reduces latency by 60%.
 *   **✂️ Brevity-First Strategy**: Default concise responses with automatic "Deep Dive" mode.
 *   **🛑 Master Stop Toggle**: Halts both UI stream and backend LLM processing instantly.
 *   **📑 Hierarchical RAG**: Section-aware chunking preserves header-body relationships.
@@ -61,7 +62,7 @@ graph TD
 ## 🛠 Tech Stack
 
 *   **Orchestration**: LangGraph (Stateful Agentic Workflow)
-*   **LLM & Embeddings**: Ollama (Split-host and Batch-embedding support)
+*   **LLM & Embeddings**: Ollama (Local) & vLLM (Production Scale)
 *   **Ingestion Engine**: IBM Docling (Resilient multi-stage parsing with Section-Awareness)
 *   **Vector Engine**: ChromaDB (hnsw:cosine)
 *   **Re-ranking**: FlashRank (ms-marco-TinyBERT-L-2-v2)

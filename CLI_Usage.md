@@ -9,7 +9,9 @@ For developers and power users, the **IPR RAG Chat CLI** provides a direct, low-
 ### 1. Launch the Interface
 Ensure the Backend is already running (`uv run main.py`). 
 > [!TIP]
-> With the new **Hybrid Configuration System**, if you have a `.env` file configured, the backend starts instantly without interactive prompts, making CLI access even faster.
+> With the new **Hybrid Configuration System**, if you have a `.env` file configured, the backend starts instantly. 
+> 
+> **Without .env**: You must complete the **Interactive Wizard** (selecting Models, Workflow Strategy, and Vision settings) in the backend terminal before the API is ready to accept CLI connections.
 
 ```bash
 uv run cli.py

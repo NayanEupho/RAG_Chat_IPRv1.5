@@ -97,6 +97,13 @@ Every library in this project was chosen for a specific mission. Here is the **W
 - **Why**: Most parsers treat PDFs as a "bag of words." **Docling** understands **Layout**. It identifies tables, headers, and footers, ensuring the RAG context is clean and structured.
 - **How**: It converts complex PDFs into **Markdown**, which LLMs understand perfectly.
 
+## 👁️ 6b. DeepSeek VLM (The Visual Cortex) [NEW v1.7]
+- **What**: A Vision-Language Model (VLM) specialized in OCR.
+- **Why**: Docling is great for digital PDFs, but fails on scans with handwriting or complex diagrams. DeepSeek VLM "sees" the pixels.
+- **Mechanism**:
+    1.  **Pass 1 (Grounding)**: Extracts text, tables, and headers into Markdown.
+    2.  **Pass 2 (Enrichment)**: Detects unlabeled images and asks the VLM to "Describe this image", injecting the caption into the text stream.
+
 ## 🚀 7. FlashRank (The Precision Filter)
 - **What**: An ultra-fast, cross-encoder re-ranking library.
 - **Why**: Vector search is "fuzzy." It might return 20 chunks that are "close" but not "correct." **FlashRank** takes those 20 and uses a tiny, powerful model to pick the Top 5 most relevant ones.
@@ -112,6 +119,11 @@ Every library in this project was chosen for a specific mission. Here is the **W
 # 🧠 Part III: The "Brain" (LangGraph Orchestration)
 
 This is the most complex part of the system. We have mapped the path from "User Click" to "Bot Answer."
+
+### 0. Dynamic Workflow Switch (The "Gearbox")
+At runtime, the system chooses between two distinct architectures based on `RAG_WORKFLOW` config:
+- **Fused Mode**: The "Sprint" gear. Fast, 1-shot planning. Ideal for 70B+ models.
+- **Modular Mode**: The "low" gear. Robust, 3-step reasoning. Ideal for smaller models (7B/8B) that need to break tasks down.
 
 ```mermaid
 graph TD
@@ -345,7 +357,14 @@ graph TD
 ```
 
 ### 2. Stage A: Dependency-Free Detection
-To keep the project lean, the system does not rely on libraries like `python-dotenv`. Instead, `backend/startup.py` contains a custom parser that reads the key-value pairs directly. This ensures that the configuration system works even in environments where external package installation is restricted.
+To keep the project lean, the system does not rely on libraries like `python-dotenv`. Instead, `backend/startup.py` contains a custom parser that reads the key-value pairs directly.
+
+**Interactive Pre-Flight Wizard**:
+If no `.env` is found (or validation fails), the system launches a rich CLI wizard. This allows you to:
+- **Select Host**: Choose between Local (localhost) or Remote (HPC cluster).
+- **Pick Models**: It queries the Ollama API to show a live list of available models.
+- **Set Strategy**: Choose between **Fused** (Speed) or **Modular** (Consistency) workflows.
+- **Enable Vision**: Toggle DeepSeek-OCR integration on the fly.
 
 ### 3. Stage B: Real-time Validation (The "Probing" Phase)
 Unlike many systems that stay silent when given bad settings, our system performs two distinct health checks:

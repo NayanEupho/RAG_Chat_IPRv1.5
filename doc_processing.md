@@ -79,6 +79,8 @@ Content:
 The following diagram shows the network architecture...
 ```
 
+> **Note**: The `Visual:` field is dynamic. It only appears if the chunk contains a `visual_type` (e.g., Diagram, Table). The UI uses this tag to display special badges (e.g., `[DIAGRAM]`) in the source strip.
+
 ### C. LLM Integration
 Segments are injected into `<knowledge_base>` tags. The LLM generates citations like:
 > "According to Security_Policy.pdf (Section: Setup > Firewall), port 8080 must be open."
