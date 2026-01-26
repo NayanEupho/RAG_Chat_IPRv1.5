@@ -7,7 +7,6 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rag_chat_ipr")
 
-# from background_task import BackgroundTasks # Removed incorrect import
 from backend.ingestion.watcher import WatchdogService
 
 # Global service instance
@@ -60,3 +59,18 @@ async def root():
             "embedding_host": config.embedding_model.host if config.embedding_model else None
         }
     }
+
+@app.get("/set_vlm_model")
+async def set_vlm_model(host: str, model: str):
+    """Set VLM model for OCR. Pass model='False' to disable."""
+    if model.lower() in ["false", "0", "no", "off", ""]:
+        _runtime_config.vlm_model = None
+    else:
+        _runtime_config.vlm_model = OllamaConfig(host=host, model_name=model)
+    return {"message": f"VLM model set to {model} at {host}" if _runtime_config.vlm_model else "VLM model disabled"}
+
+@app.get("/set_vlm_strategy")
+async def set_vlm_strategy(prompt: str):
+    """Set VLM prompt strategy (auto, grounding, describe, parse_figure)."""
+    _runtime_config.vlm_prompt = prompt.lower()
+    return {"message": f"VLM strategy set to {prompt.lower()}"}

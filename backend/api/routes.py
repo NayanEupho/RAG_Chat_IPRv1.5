@@ -131,22 +131,54 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request):
            final_docs = final_state.values.get("documents", [])
            targeted_docs = final_state.values.get("targeted_docs", [])
            
-           # Deduplicate Sources
+           # Deduplicate Sources while preserving Platinum Metadata
+           # We group by Source + Section to keep unique segments intact
            unique_sources = {}
            for doc in final_docs:
-                if "Source: " in doc and "\nContent: " in doc:
-                    parts = doc.split("\nContent: ", 1)
-                    src_name = parts[0].replace("Source: ", "").strip()
-                    content = parts[1]
+                # Key based on first 3 lines (Header + Source + Section)
+                lines = doc.splitlines()
+                if len(lines) >= 3 and lines[0].startswith("---"):
+                    header = lines[0]
+                    src_line = lines[1] # Source: ...
+                    sec_line = lines[2] # Section: ...
                     
-                    if src_name not in unique_sources:
-                        unique_sources[src_name] = []
-                    unique_sources[src_name].append(content)
+                    # Search for Content start
+                    content_start_idx = 3
+                    for i, line in enumerate(lines[3:], 3):
+                        if line.startswith("Content:"):
+                            content_start_idx = i
+                            break
+                    
+                    key = f"{src_line}|{sec_line}"
+                    content = "\n".join(lines[content_start_idx:])
+                    content = content.replace("Content: ", "", 1)
+                    
+                    if key not in unique_sources:
+                        unique_sources[key] = {
+                            "header": header,
+                            "src": src_line,
+                            "sec": sec_line,
+                            "contents": []
+                        }
+                    unique_sources[key]["contents"].append(content)
+                else:
+                    # Fallback for non-standard chunks
+                    if doc not in unique_sources:
+                        unique_sources[doc] = {"raw": doc}
            
            deduped_docs = []
-           for src, contents in unique_sources.items():
-               combined_content = "\n\n---\n\n".join(contents)
-               deduped_docs.append(f"Source: {src}\nContent: {combined_content}")
+           for key, data in unique_sources.items():
+               if "raw" in data:
+                   deduped_docs.append(data["raw"])
+               else:
+                   combined_content = "\n\n---\n\n".join(data["contents"])
+                   # Rebuild the Platinum Envelope
+                   deduped_docs.append(
+                       f"{data['header']}\n"
+                       f"{data['src']}\n"
+                       f"{data['sec']}\n"
+                       f"Content: {combined_content}"
+                   )
 
            import json
            metadata = json.dumps({

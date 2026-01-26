@@ -113,8 +113,9 @@ class DocumentProcessor:
                 debug_dir = "VLM_generated_md_docs"
                 os.makedirs(debug_dir, exist_ok=True)
                 
-                # Create output filename: original.pdf -> original.pdf.md
-                out_filename = f"{filename}.md"
+                # Sanitize filename for disk storage (Remove illegal OS chars)
+                safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+                out_filename = f"{safe_filename}.md"
                 out_path = os.path.join(debug_dir, out_filename)
                 
                 with open(out_path, "w", encoding="utf-8") as f:

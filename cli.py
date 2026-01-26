@@ -25,7 +25,7 @@ def get_session_id():
 
 async def chat_loop(api_url: str):
     session_id = get_session_id()
-    console.print(f"[bold green]Connected to RAG Chat v1.6 (Session: {session_id})[/bold green]")
+    console.print(f"[bold green]Connected to RAG Chat v1.7 (Session: {session_id})[/bold green]")
     console.print("Type 'exit' to quit. Streaming & Status enabled.")
     
     async with aiohttp.ClientSession() as session:
@@ -93,7 +93,10 @@ async def chat_loop(api_url: str):
                 if sources:
                     console.print("[dim]Sources:[/dim]")
                     for src in sources:
-                         console.print(f"[dim]- {src.splitlines()[0]}[/dim]")
+                         # Platinum Parse: Skip header, find "Source:" line
+                         lines = src.splitlines()
+                         source_line = next((l for l in lines if l.startswith("Source:")), lines[0] if lines else "Unknown")
+                         console.print(f"[dim]- {source_line}[/dim]")
 
             except KeyboardInterrupt:
                 break
