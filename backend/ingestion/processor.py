@@ -108,6 +108,20 @@ class DocumentProcessor:
             if not md_content.strip():
                 raise ValueError("Extracted content is empty.")
 
+            # DEBUG: Save generated Markdown to disk for inspection
+            try:
+                debug_dir = "VLM_generated_md_docs"
+                os.makedirs(debug_dir, exist_ok=True)
+                
+                # Create output filename: original.pdf -> original.pdf.md
+                out_filename = f"{filename}.md"
+                out_path = os.path.join(debug_dir, out_filename)
+                
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(md_content)
+                logger.info(f"Saved debug markdown to: {out_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save debug markdown: {e}")
                 
         except Exception as e:
             logger.warning(f"Full pipeline failed for {file_path}: {e}")

@@ -46,6 +46,7 @@ upload_docs/*
 *.txt
 *.log
 .cli_session
+VLM_generated_md_docs/
 
 # Frontend (Next.js / Bun / Node)
 node_modules/

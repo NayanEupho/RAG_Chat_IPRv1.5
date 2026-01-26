@@ -145,7 +145,62 @@ def sanitize_markdown(raw_md: str) -> str:
         md = re.sub(r'\n{4,}', '\n\n\n', md)
         logger.debug(f"Reduced {issues['excessive_whitespace']} excessive whitespace blocks")
     
+    # NEW: Attempt to merge tables split across pages (via --- separator)
+    # This repairs the VLM context break where a table spans two pages.
+    md = _merge_split_tables(md)
+    
     return md
+
+
+def _merge_split_tables(text: str) -> str:
+    """
+    Detect tables split by page separators and merge them if compatible.
+    
+    Pattern detected:
+    | Row | ...
+    
+    ---
+    
+    | Row | ... (or | Header | ...)
+    
+    Strategy:
+    1. Find page separators surrounded by table rows.
+    2. Check if column counts match.
+    3. Remove the separator to stitch them.
+    4. Provide special handling for repeated headers.
+    """
+    # Regex to find: (End of Table Row) + (Page Separator) + (Start of Table Row)
+    # Captures: 
+    # Group 1: Last row of Table A
+    # Group 2: The Separator (\n\n---\n\n)
+    # Group 3: First row of Table B (potentially a header)
+    split_pattern = re.compile(
+        r'(\|.*\|)\s*(\n\n---\n\n)\s*(\|.*\|)',
+        re.MULTILINE
+    )
+    
+    def replacer(match):
+        row_a = match.group(1)
+        separator = match.group(2)
+        row_b = match.group(3)
+        
+        # 1. Count columns (pipes) to ensure they are the same table
+        cols_a = row_a.count('|')
+        cols_b = row_b.count('|')
+        
+        # Allow +/- 1 tolerance for OCR jitter, but generally should match
+        if abs(cols_a - cols_b) > 1:
+            return match.group(0) # Don't merge distinct tables
+            
+        # 2. Check for Repeated Header case
+        # If Row B looks like a header (contains --- or bold text similar to headers), we should ideally drop it?
+        # For safety, we just merge. The LLM can handle repeated headers better than broken tables.
+        
+        # Merge: Join Row A and Row B with a newline, effectively deleting the separator
+        logger.info("[SANITIZER] Merged a split table across page boundary.")
+        return f"{row_a}\n{row_b}"
+
+    return split_pattern.sub(replacer, text)
 
 
 def detect_visual_elements(text: str) -> dict:
