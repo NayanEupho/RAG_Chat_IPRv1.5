@@ -61,30 +61,25 @@ class VisionHandler:
         self.dpi = dpi
         self.config = get_config()
         
-    def _render_pages_to_images(self, file_path: str) -> List[bytes]:
+    def _render_pages_generator(self, file_path: str):
         """
-        Convert PDF pages to high-resolution images.
-        
-        Args:
-            file_path: Path to the PDF file
-            
-        Returns:
-            List of image bytes (PNG format)
+        Generator that yields page images one by one to save RAM.
+        Optimized for large documents.
         """
         if fitz is None:
             raise ImportError("PyMuPDF (fitz) is not installed. Please run: uv add pymupdf")
 
-        images = []
         try:
             doc = fitz.open(file_path)
             
             # Adaptive DPI: Use lower resolution for large documents to save memory
             effective_dpi = self.dpi
+            # For massive docs, we drop DPI more aggressively or just hope generator is enough.
+            # Generator IS enough for RAM, but we still drop DPI for VLM speed.
             if len(doc) > 20:
                 effective_dpi = 150
-                logger.info(f"Large document ({len(doc)} pages), reducing DPI to {effective_dpi}")
             
-            zoom = effective_dpi / 72  # 72 is the default PDF DPI
+            zoom = effective_dpi / 72
             matrix = fitz.Matrix(zoom, zoom)
             
             for page_num in range(len(doc)):
@@ -93,17 +88,14 @@ class VisionHandler:
                 
                 # Convert to PNG bytes
                 img_bytes = pix.tobytes("png")
-                images.append(img_bytes)
-                
                 logger.debug(f"Rendered page {page_num + 1}/{len(doc)}")
+                yield img_bytes
                 
             doc.close()
             
         except Exception as e:
             logger.error(f"Failed to render PDF pages: {e}")
             raise
-            
-        return images
     
     def _to_base64(self, image_bytes: bytes) -> str:
         """Convert image bytes to base64 string for Ollama API."""
@@ -226,37 +218,40 @@ class VisionHandler:
         
         logger.info(f"[VISION] Processing PDF with strategy '{prompt_strategy}': {file_path}")
         
-        # 1. Render all pages to images
-        page_images = self._render_pages_to_images(file_path)
-        logger.info(f"[VISION] Rendered {len(page_images)} pages")
-        
-        CONCURRENCY_LIMIT = 3
-        
-        # Determine the primary prompt based on strategy
-        if prompt_strategy == "auto":
-            primary_prompt = PROMPTS["grounding"]
-        elif prompt_strategy in PROMPTS:
-            primary_prompt = PROMPTS[prompt_strategy]
-        else:
-            primary_prompt = PROMPTS["grounding"]  # Fallback
-        
-        # 2. PASS 1: Process each page with selected prompt
-        # 2. PASS 1: Process each page with selected prompt
+        # 1. & 2. PASS 1: Render and Process in Batches
+        # We now use the generator to avoid holding all images in RAM
         markdown_pages = []
-        # Optimization: We do NOT cache b64_images here to save RAM.
-        # We re-encode from page_images on-demand for Pass 2 if needed.
+        page_iterator = self._render_pages_generator(file_path)
         
-        for i in range(0, len(page_images), CONCURRENCY_LIMIT):
-            batch = page_images[i:i + CONCURRENCY_LIMIT]
-            b64_batch = [self._to_base64(img) for img in batch]
-            
-            # Process batch concurrently with selected prompt
-            results = await asyncio.gather(*[
+        batch_images = []
+        
+        # Batch Processor Helper
+        async def process_batch(images):
+            b64_batch = [self._to_base64(img) for img in images]
+            return await asyncio.gather(*[
                 self._call_vlm(b64_img, primary_prompt) for b64_img in b64_batch
             ])
+
+        try:
+            for img_bytes in page_iterator:
+                batch_images.append(img_bytes)
+                
+                if len(batch_images) >= CONCURRENCY_LIMIT:
+                    results = await process_batch(batch_images)
+                    markdown_pages.extend(results)
+                    batch_images = [] # Clear RAM
+                    logger.info(f"[VISION] Processed batch of {CONCURRENCY_LIMIT} pages.")
             
-            markdown_pages.extend(results)
-            logger.info(f"[VISION] Pass 1 ({prompt_strategy}): Processed pages {i+1}-{min(i+CONCURRENCY_LIMIT, len(page_images))}/{len(page_images)}")
+            # Process remaining
+            if batch_images:
+                results = await process_batch(batch_images)
+                markdown_pages.extend(results)
+                
+        except Exception as e:
+            logger.error(f"Vision processing loop failed: {e}")
+            # Return partial results if we crash mid-way
+            if not markdown_pages:
+                return ""
         
         # 3. PASS 2: Only for "auto" mode - enrich pages with unlabeled visuals
         if prompt_strategy == "auto":

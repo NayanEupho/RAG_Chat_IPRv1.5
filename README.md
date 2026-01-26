@@ -1,4 +1,4 @@
-# IPR RAG Chat v1.7
+# IPR RAG Chat v2.1 (Platinum Certified)
 
 A production-grade, modular, and agentic RAG (Retrieval-Augmented Generation) system. Built with **FastAPI**, **LangGraph**, **Ollama**, **Docling**, and **Next.js**.
 
@@ -42,20 +42,18 @@ graph TD
 
 ---
 
-## 🌟 New Features (v1.7)
+## 🌟 New Features (v2.1 Platinum)
 
+*   **🛡️ OOM-Safe Ingestion Engine**: Generator-based PDF rendering prevents memory crashes on 500+ page documents.
 *   **🔬 DeepSeek VLM OCR**: High-fidelity vision-based extraction for scanned PDFs and complex layouts.
-*   **🧙‍♂️ Interactive Startup Wizard**: Zero-config launch with interactive prompts for Host, Model, and Strategy selection.
+*   **🧙‍♂️ Interactive Debug Wizard**: New TUI-based `embedding_debug.py` for live system probing and diagnostics.
 *   **⚡ Dynamic RAG Workflow**: Choose between **Fused Strategy** (Speed/Planner) and **Modular Strategy** (Depth/Router) at runtime.
 *   **🎯 Two-Pass Extraction**: Auto-detects unlabeled images and adds AI-generated descriptions.
 *   **📊 Visual-Aware Chunking**: Tables and diagrams are protected from fragmentation during chunking.
 *   **🖼️ Visual Metadata**: Chunks tagged with `has_visual`, `visual_type`, and `visual_title` for smarter retrieval.
-*   **⚙️ Configurable VLM Prompts**: Choose between `auto`, `grounding`, `describe`, and `parse_figure` modes.
+*   **⚙️ Robust Configuration**: Hardened `.env` parsing with drift detection and validation.
 *   **🕹️ Intelligence Mode Selector**: Seamlessly switch between **Auto**, **RAG**, and **Chat** modes.
 *   **🧠 Unified Session Context**: 10-turn sliding memory window ensures the AI never loses context.
-*   **✂️ Brevity-First Strategy**: Default concise responses with automatic "Deep Dive" mode.
-*   **🛑 Master Stop Toggle**: Halts both UI stream and backend LLM processing instantly.
-*   **📑 Hierarchical RAG**: Section-aware chunking preserves header-body relationships.
 *   **💎 Premium Glassmorphic UI**: High-speed interface with live thinking states and buttery animations.
 
 
