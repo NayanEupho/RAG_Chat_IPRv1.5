@@ -241,13 +241,14 @@ class VisionHandler:
             primary_prompt = PROMPTS["grounding"]  # Fallback
         
         # 2. PASS 1: Process each page with selected prompt
+        # 2. PASS 1: Process each page with selected prompt
         markdown_pages = []
-        b64_images = []  # Store for potential pass 2 (auto mode only)
+        # Optimization: We do NOT cache b64_images here to save RAM.
+        # We re-encode from page_images on-demand for Pass 2 if needed.
         
         for i in range(0, len(page_images), CONCURRENCY_LIMIT):
             batch = page_images[i:i + CONCURRENCY_LIMIT]
             b64_batch = [self._to_base64(img) for img in batch]
-            b64_images.extend(b64_batch)
             
             # Process batch concurrently with selected prompt
             results = await asyncio.gather(*[
@@ -260,26 +261,29 @@ class VisionHandler:
         # 3. PASS 2: Only for "auto" mode - enrich pages with unlabeled visuals
         if prompt_strategy == "auto":
             enriched_pages = []
-            pages_needing_enrichment = []
+            enrichment_tasks = []
             
-            for idx, (md, b64_img) in enumerate(zip(markdown_pages, b64_images)):
+            # Iterate through results and check if they need enrichment
+            for idx, md in enumerate(markdown_pages):
                 if self._has_unlabeled_visuals(md):
-                    pages_needing_enrichment.append((idx, b64_img, md))
+                    # On-demand Base64 conversion (CPU vs RAM trade-off selected)
+                    b64_img = self._to_base64(page_images[idx])
+                    enrichment_tasks.append((idx, b64_img, md))
                     enriched_pages.append(None)  # Placeholder
                 else:
                     enriched_pages.append(md)
             
-            if pages_needing_enrichment:
-                logger.info(f"[VISION] Pass 2: {len(pages_needing_enrichment)} pages need visual enrichment")
+            if enrichment_tasks:
+                logger.info(f"[VISION] Pass 2: {len(enrichment_tasks)} pages need visual enrichment")
                 
                 # Process enrichment concurrently
                 enrichment_results = await asyncio.gather(*[
                     self._enrich_with_descriptions(idx, b64_img, md)
-                    for idx, b64_img, md in pages_needing_enrichment
+                    for idx, b64_img, md in enrichment_tasks
                 ])
                 
                 # Fill in the enriched pages
-                for (idx, _, _), enriched_md in zip(pages_needing_enrichment, enrichment_results):
+                for (idx, _, _), enriched_md in zip(enrichment_tasks, enrichment_results):
                     enriched_pages[idx] = enriched_md
             
             final_pages = enriched_pages
