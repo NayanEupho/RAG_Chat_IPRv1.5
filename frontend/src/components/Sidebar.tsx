@@ -33,7 +33,7 @@ export default function Sidebar({
     const getApiBase = () => {
         if (typeof window !== 'undefined') {
             const hostname = window.location.hostname;
-            return `http://${hostname}:8000/api`;
+            return `https://${hostname}:443/api`;
         }
         return 'http://localhost:8000/api';
     };

@@ -1,0 +1,42 @@
+services:
+  # Service 1: Agent (Backend API)
+  agent-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ipr-rag-agent
+    ports:
+      - "8000:8000"
+    environment:
+      # Connect to Ollama running on the host machine
+      - RAG_MAIN_HOST=http://10.20.39.12:11434
+      - RAG_EMBED_HOST=http://10.20.39.12:11434
+      # Adjust these model names to match what you have pulled in Ollama
+      - RAG_MAIN_MODEL=qwen2.5:72b-instruct
+      - RAG_EMBED_MODEL=embeddinggemma:300m
+      # Workflow
+      - RAG_WORKFLOW=fused
+    volumes:
+      # Persist uploaded documents and the vector database
+      - ./upload_docs:/app/upload_docs
+      - ./chroma_db:/app/chroma_db
+      # Optional: Persist SQLite chat history/checkpoints
+      - ./agent_state.db:/app/agent_state.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Service 2: GUI (Frontend)
+  gui-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ipr-rag-gui
+    ports:
+      - "3000:3000"
+    environment:
+      # Next.js telemetry disable (optional)
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      - agent-backend
+    restart: unless-stopped

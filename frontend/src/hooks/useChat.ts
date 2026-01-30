@@ -43,8 +43,8 @@ export function useChat() {
   const fetchDocuments = useCallback(async () => {
     try {
       const hostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const port = '8000';
-      const res = await fetch(`http://${hostname}:${port}/api/documents`);
+      const port = '443';
+      const res = await fetch(`https://${hostname}:${port}/api/documents`);
       const data = await res.json();
       console.log(`[useChat] Fetched ${data.documents?.length || 0} documents from ${hostname}:${port}`);
       return data.documents || [];
@@ -56,7 +56,7 @@ export function useChat() {
 
   const getApiBase = () => {
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    return `http://${hostname}:8000/api`;
+    return `https://${hostname}:443/api`;
   };
 
   const loadHistory = async (sid: string) => {
