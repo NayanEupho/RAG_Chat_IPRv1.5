@@ -15,6 +15,9 @@ COPY pyproject.toml ./
 # Install Python dependencies defined in pyproject.toml
 # We install these globally in the container
 RUN pip install --no-cache-dir .
+RUN apt-get update && apt-get install -y \
+    xmlsec1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the entire application code
 COPY . .

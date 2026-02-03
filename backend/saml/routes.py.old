@@ -1,0 +1,184 @@
+from fastapi import APIRouter, Request
+from fastapi.responses import RedirectResponse, PlainTextResponse
+from saml2.client import Saml2Client
+from saml2.config import Config
+from saml2.metadata import entity_descriptor
+import logging
+from .settings import get_saml_settings
+from .auth import SAMLUser, get_current_user, get_optional_user, create_session_response, create_logout_response
+
+
+from onelogin.saml2.auth import OneLogin_Saml2_Auth
+
+from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi.responses import Response, RedirectResponse
+
+#from backend.saml.sp_config import SAML_CONFIG
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+#router = APIRouter(prefix="/saml", tags=["SAML"])
+# ---------- SAML Client ----------
+#def get_saml_client():
+#    cfg = Config()
+#    cfg.load(SAML_CONFIG)
+#    return Saml2Client(cfg)
+
+# ---------- Routes ----------
+"""
+def prepare_flask_request(request: Request) -> dict:
+    url_data = request.url
+    return {
+        "https": "on" if url_data.scheme == "https" else "off",
+        "http_host": request.headers.get("host", url_data.netloc),
+        "server_port": url_data.port or (443 if url_data.scheme == "https" else 80),
+        "script_name": url_data.path,
+        "get_data": dict(request.query_params),
+        "post_data": {},
+        "query_string": str(request.query_params)
+    }
+"""
+
+async def init_saml_auth(request: Request, post_data: dict = None) -> OneLogin_Saml2_Auth:
+    settings = get_saml_settings()
+
+    
+    if not settings.is_configured:
+        raise HTTPException(status_code=500, detail="SAML not configured")
+    req = prepare_flask_request(request)
+    if post_data:
+        req["post_data"] = post_data
+    return OneLogin_Saml2_Auth(req, settings.to_onelogin_settings())
+
+def prepare_flask_request(request: Request) -> dict:
+    url_data = request.url
+    headers = request.headers
+    proto = headers.get("x-forwarded-proto", request.url.scheme)
+    return {
+        "https": "on" if url_data.scheme == "https" else "off",
+        "http_host": request.headers.get("host", url_data.netloc),
+        "server_port": url_data.port or (443 if url_data.scheme == "https" else 80),
+        "script_name": request.url.path,
+        "get_data": dict(request.query_params),
+        "post_data": {},
+        "query_string": request.url.query,
+        "request_method": request.method,
+    }
+
+async def my_init_saml_auth(
+    request: Request,
+    post_data: dict | None = None
+) -> OneLogin_Saml2_Auth:
+
+    settings = get_saml_settings()
+    if not settings.is_configured:
+        raise HTTPException(status_code=500, detail="SAML not configured")
+
+    req = prepare_flask_request(request)
+
+    if post_data:
+        req["post_data"] = {k: str(v) for k, v in post_data.items()}
+
+    auth = OneLogin_Saml2_Auth(req, settings.to_onelogin_settings())
+    return auth
+
+@router.get("/login")
+async def saml_login(request: Request, next: str = "/"):
+    auth = await init_saml_auth(request)
+    redirect_url = auth.login(return_to=next)
+    return RedirectResponse(url=redirect_url, status_code=303)
+# ... rest of endpoints use _get_saml_auth and thus trigger imports at request time
+"""
+@router.post("/acs")
+async def saml_acs(request: Request):
+    form_data = await request.form()
+    print("Form_data:", form_data)
+
+    
+
+    post_data = {key: value for key, value in form_data.items()}
+    #print("Post_data:", post_data)
+
+    import base64
+
+    saml_response_b64 = post_data.get("SAMLResponse")
+
+    decoded_xml = base64.b64decode(saml_response_b64).decode("utf-8")
+
+    print("Decoded SAML Response XML:")
+    print(decoded_xml)
+    
+    #auth = await init_saml_auth(request, post_data)
+
+    auth = await my_init_saml_auth(request, post_data)
+    
+    print("NameID:", auth.get_nameid())
+    print("NameID format:", auth.get_nameid_format())
+    print("NameID format:", auth.get_attributes)
+    
+
+    auth.process_response()
+    errors = auth.get_errors()
+
+    if errors:
+        logger.error(f"SAML ACS Error: {errors}")
+        raise HTTPException(status_code=400, detail=f"SAML failed: {auth.get_last_error_reason()}")
+
+    if not auth.is_authenticated():
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+  
+
+    name_id = auth.get_nameid()
+    attributes = auth.get_attributes()
+
+    print("Name_ID: " + name_id)
+
+    # Validate user_id is not empty
+    if not name_id or not name_id.strip():
+        raise HTTPException(status_code=400, detail="IdP returned empty user ID")
+
+    email = (
+        attributes.get("email", [None])[0] or
+        attributes.get("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", [None])[0] or
+        (name_id if "@" in str(name_id) else None)
+    )
+
+    display_name = (
+        attributes.get("displayName", [None])[0] or
+        attributes.get("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name", [None])[0] or
+        email
+    )
+
+    user = SAMLUser(user_id=name_id, email=email, display_name=display_name, attributes=attributes)
+    logger.info(f"SAML login successful: {user.user_id}")
+
+    relay_state = post_data.get("RelayState", "/")
+    redirect_url = relay_state if relay_state and not relay_state.startswith("http") else "/"
+    return create_session_response(user, redirect_url)
+"""
+@router.post("/acs")
+async def saml_acs(request: Request):
+    form_data = await request.form()
+    post_data = {k: str(v) for k, v in form_data.items()}
+
+    auth = await my_init_saml_auth(request, post_data)
+
+    auth.process_response()
+
+    print("NameID:", auth.get_nameid())
+    print("NameID format:", auth.get_nameid_format())
+    print("NameID format:", auth.get_attributes)
+    
+
+    errors = auth.get_errors()
+    if errors:
+        print("Errors:", errors)
+        print("Last error:", auth.get_last_error_reason())
+        raise HTTPException(status_code=401, detail="SAML failed")
+
+    print("NameID:", auth.get_nameid())
+    print("Attributes:", auth.get_attributes())
+
+    return {"user": auth.get_nameid()}

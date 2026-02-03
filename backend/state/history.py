@@ -31,6 +31,7 @@ def init_history_db():
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
                 title TEXT,
+                user_id TEXT DEFAULT 'anonymous',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -49,24 +50,31 @@ def init_history_db():
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id)
             )
         """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
         
-        # Lazy migration: check if columns exist
+        # Migration for existing tables - MUST RUN BEFORE INDICES
         cursor = conn.execute("PRAGMA table_info(messages)")
         columns = [row['name'] for row in cursor.fetchall()]
         if 'metadata' not in columns:
             conn.execute("ALTER TABLE messages ADD COLUMN metadata TEXT")
-            logger.info("Migrated messages table: added metadata column")
         if 'thoughts' not in columns:
             conn.execute("ALTER TABLE messages ADD COLUMN thoughts TEXT")
-            logger.info("Migrated messages table: added thoughts column")
+
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        session_columns = [row['name'] for row in cursor.fetchall()]
+        if 'user_id' not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT 'legacy_user'")
+            logger.info("Migrated sessions table: added user_id column")
+
+        # Now safe to create indices
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
             
         conn.commit()
         _db_initialized = True
     except Exception as e:
         logger.error(f"Failed to init history DB: {e}")
 
-def create_session(session_id: str, title: str = None):
+def create_session(session_id: str, title: str = None, user_id: str = "anonymous"):
     init_history_db()
     conn = get_connection()
     cursor = conn.cursor()
@@ -74,22 +82,24 @@ def create_session(session_id: str, title: str = None):
     if not cursor.fetchone():
         final_title = title or f"Session {session_id[:8]}"
         conn.execute(
-            "INSERT INTO sessions (session_id, title) VALUES (?, ?)",
-            (session_id, final_title)
+            "INSERT INTO sessions (session_id, title, user_id) VALUES (?, ?, ?)",
+            (session_id, final_title, user_id)
         )
         conn.commit()
         return True
     return False
 
-def create_new_session(title: str = None):
+def create_new_session(title: str = None, user_id: str = "anonymous"):
     """Generates a new session ID and creates the session."""
     import uuid
     session_id = f"web_{uuid.uuid4().hex[:8]}"
-    create_session(session_id, title)
-    return {"session_id": session_id, "title": title or f"Session {session_id[:8]}"}
+    create_session(session_id, title, user_id)
+    return {"session_id": session_id, "title": title or f"Session {session_id[:8]}", "user_id": user_id}
 
 def add_message(session_id: str, role: str, content: str, intent: str = None, sources: list = None, metadata: dict = None, thoughts: list = None):
-    # Ensure session exists
+    # Ensure session exists (Note: this auto-creation defaults to 'anonymous' if not exists, 
+    # but normally create_session is called with user_id by the route first)
+    # If the session already exists, create_session does nothing, so user_id isn't overwritten.
     create_session(session_id)
     
     sources_json = json.dumps(sources) if sources else "[]"
@@ -106,15 +116,27 @@ def add_message(session_id: str, role: str, content: str, intent: str = None, so
     conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?", (session_id,))
     conn.commit()
 
-def get_all_sessions():
+def get_all_sessions(user_id: str = None):
     init_history_db()
     conn = get_connection()
-    cursor = conn.execute("SELECT * FROM sessions ORDER BY updated_at DESC")
+    if user_id:
+        cursor = conn.execute("SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC", (user_id,))
+    else:
+        cursor = conn.execute("SELECT * FROM sessions ORDER BY updated_at DESC")
     return [dict(row) for row in cursor.fetchall()]
 
-def delete_session(session_id: str):
+def delete_session(session_id: str, user_id: str = None):
     init_history_db()
     conn = get_connection()
+    
+    if user_id:
+        cursor = conn.execute("SELECT user_id FROM sessions WHERE session_id = ?", (session_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError("Session not found")
+        if row['user_id'] != user_id:
+            raise PermissionError("Not authorized to delete this session")
+            
     conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
     conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
     conn.commit()
@@ -149,3 +171,22 @@ def get_session_history(session_id: str):
              
         rows.append(d)
     return rows
+
+def get_session_owner(session_id: str) -> str:
+    """Get the user_id that owns a session."""
+    init_history_db()
+    conn = get_connection()
+    cursor = conn.execute("SELECT user_id FROM sessions WHERE session_id = ?", (session_id,))
+    row = cursor.fetchone()
+    return row['user_id'] if row else None
+
+
+def delete_all_sessions():
+    """Delete all sessions and messages for clean start."""
+    init_history_db()
+    conn = get_connection()
+    conn.execute("DELETE FROM messages")
+    conn.execute("DELETE FROM sessions")
+    conn.commit()
+    logger.info("Deleted all sessions and messages")
+

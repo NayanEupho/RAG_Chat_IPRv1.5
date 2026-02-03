@@ -50,6 +50,13 @@ app.add_middleware(
 from backend.api.routes import router as api_router
 app.include_router(api_router, prefix="/api")
 
+from backend.saml.routes import router as saml_router
+app.include_router(saml_router, prefix="/saml")
+
+# NEW: include SAML router
+#from backend.saml.routes import router as saml_router
+#app.include_router(saml_router)
+
 @app.get("/")
 async def root():
     config = get_config()

@@ -591,3 +591,16 @@ export default function ChatInterface() {
         </div>
     );
 }
+
+
+export function LogoutButton() {
+    const logout = async () => {
+        await fetch("/saml/logout", {
+            method: "POST",
+            credentials: "include",
+        });
+        window.location.href = "/login";
+    };
+
+    return <button onClick={logout}>Logout</button>;
+}

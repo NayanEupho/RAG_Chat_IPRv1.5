@@ -44,7 +44,7 @@ export function useChat() {
     try {
       const hostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const port = '443';
-      const res = await fetch(`https://${hostname}:${port}/api/documents`);
+      const res = await fetch(`https://${hostname}:${port}/api/documents`, { credentials: 'include' });
       const data = await res.json();
       console.log(`[useChat] Fetched ${data.documents?.length || 0} documents from ${hostname}:${port}`);
       return data.documents || [];
@@ -61,7 +61,7 @@ export function useChat() {
 
   const loadHistory = async (sid: string) => {
     try {
-      const res = await fetch(`${getApiBase()}/history/${sid}`);
+      const res = await fetch(`${getApiBase()}/history/${sid}`, { credentials: 'include' });
       const data = await res.json();
       if (data.messages && data.messages.length > 0) {
         const mapped: Interaction[] = data.messages.map((m: any) => ({
@@ -101,7 +101,8 @@ export function useChat() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, session_id: sessionId, mode }),
-        signal: controller.signal
+        signal: controller.signal,
+        credentials: 'include'
       });
 
       if (!response.body) throw new Error("No response body");

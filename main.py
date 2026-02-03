@@ -32,7 +32,7 @@ def main():
     os.environ["RAG_EMBED_MODEL"] = config.embedding_model.model_name
     
     # We run uvicorn programmatically
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=8000, reload=True, forwarded_allow_ips="*",)
 
 if __name__ == "__main__":
     main()

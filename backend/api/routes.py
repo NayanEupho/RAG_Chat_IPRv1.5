@@ -3,6 +3,11 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from backend.graph.workflow import build_graph
 from langchain_core.messages import HumanMessage, AIMessage
+# For SAML
+#from fastapi import Depends
+#from backend.auth.deps import get_current_user
+#end SAML
+
 import uuid
 
 router = APIRouter()
@@ -32,6 +37,8 @@ class ChatResponse(BaseModel):
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
+#modified for SAML
+#async def chat_endpoint(request: ChatRequest, user=Depends(get_current_user)):
     """
     Classic chat endpoint (Non-Streaming).
     """
@@ -299,3 +306,13 @@ def get_documents():
     from backend.rag.store import get_vector_store
     store = get_vector_store()
     return {"documents": store.get_all_files()}
+
+
+@router.get("/login")
+def saml_login(request: Request):
+    print("login api callled.....")
+#    auth = _get_saml_auth(request)
+#    return_to = request.query_params.get("next", "/")
+#    redirect_url = auth.login(return_to=return_to)
+#    return RedirectResponse(redirect_url)
+    return {"login": 1 }

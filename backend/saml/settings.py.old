@@ -1,0 +1,95 @@
+"""
+SAML Configuration Settings
+
+Environment Variables Required:
+- SAML_IDP_ENTITY_ID: Your IdP's entity ID
+- SAML_IDP_SSO_URL: IdP's Single Sign-On URL
+- SAML_IDP_CERT_FILE: Path to IdP's X.509 certificate file
+- SAML_SESSION_SECRET: Secret key for JWT signing
+"""
+import os
+from functools import lru_cache
+from typing import Optional
+import logging
+import dotenv
+
+logger = logging.getLogger(__name__)
+
+
+class SAMLSettings:
+    def __init__(self):
+        # Service Provider (Your App) Settings
+        self.sp_entity_id = os.getenv("SAML_SP_ENTITY_ID", "https://askme.ipr.res.in/metadata")
+        self.sp_acs_url = os.getenv("SAML_SP_ACS_URL", "https://askme.ipr.res.in/saml/acs")
+        self.sp_slo_url = os.getenv("SAML_SP_SLO_URL", "https://askme.ipr.res.in/saml/slo")
+        print(self.sp_slo_url)
+
+        self.idp_entity_id = os.getenv("SAML_IDP_ENTITY_ID","http://adfs.ipr.res.in/adfs/services/trust")
+        self.idp_sso_url = os.getenv("SAML_IDP_SSO_URL", "https://adfs.ipr.res.in/adfs/ls")
+        self.idp_slo_url = os.getenv("SAML_IDP_SLO_URL", "https://adfs.ipr.res.in/adfs/ls")
+        self.idp_cert_file = os.getenv("SAML_IDP_CERT_FILE", "/home/vkpatel/askme.crt")
+
+        print(self.idp_entity_id)
+        print(self.idp_slo_url)
+        print(self.idp_sso_url)
+
+        # Session Settings
+        self.session_cookie_name = "saml_session"
+        self.session_secret = os.getenv("SAML_SESSION_SECRET", "CHANGE-THIS-IN-PRODUCTION-minimum-32-chars")
+        self.session_max_age = int(os.getenv("SAML_SESSION_MAX_AGE", "28800"))  # 8 hours
+
+        
+        print(self.sp_entity_id)
+        print(self.sp_acs_url)
+        print(self.idp_entity_id)
+        
+
+    @property
+    def is_configured(self) -> bool:
+        return all([self.idp_entity_id, self.idp_sso_url, self.idp_cert_file])
+
+    def get_idp_cert(self) -> Optional[str]:
+        if not self.idp_cert_file or not os.path.exists(self.idp_cert_file):
+            logger.warning(f"IdP certificate file not found: {self.idp_cert_file}")
+            return None
+        with open(self.idp_cert_file, 'r') as f:
+            return f.read()
+
+    def to_onelogin_settings(self) -> dict:
+        return {
+            "strict": True,
+            "debug": False,
+            "sp": {
+                "entityId": self.sp_entity_id,
+                "assertionConsumerService": {
+                    "url": self.sp_acs_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                },
+                "singleLogoutService": {
+                    "url": self.sp_slo_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                },
+                 
+                "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+                
+            },
+            "idp": {
+                "entityId": self.idp_entity_id,
+                "singleSignOnService": {
+                    "url": self.idp_sso_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                },
+                "x509cert": self.get_idp_cert() or ""
+            },
+            "security": {
+                "requestedAuthnContext": False,
+                "authnRequestsSigned": False,
+                "wantAssertionsSigned": True,
+            }
+             
+        }
+
+
+@lru_cache()
+def get_saml_settings() -> SAMLSettings:
+    return SAMLSettings()

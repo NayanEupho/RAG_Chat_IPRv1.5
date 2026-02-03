@@ -41,7 +41,7 @@ export default function Sidebar({
     // Fetch sessions
     const fetchSessions = async () => {
         try {
-            const res = await fetch(`${getApiBase()}/sessions`);
+            const res = await fetch(`${getApiBase()}/sessions`, { credentials: 'include' });
             const data = await res.json();
             if (data && data.sessions) {
                 setSessions(data.sessions);
@@ -56,7 +56,7 @@ export default function Sidebar({
     // Fetch Config (Model Status)
     const fetchConfig = async () => {
         try {
-            const res = await fetch(`${getApiBase()}/config`);
+            const res = await fetch(`${getApiBase()}/config`, { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
                 setConfig(data);
@@ -72,7 +72,7 @@ export default function Sidebar({
     // Check System Health (granular per-model check)
     const checkHealth = async () => {
         try {
-            const res = await fetch(`${getApiBase()}/status`);
+            const res = await fetch(`${getApiBase()}/status`, { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
                 // Granular model health from new API
@@ -97,7 +97,8 @@ export default function Sidebar({
             const res = await fetch(`${getApiBase()}/sessions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: title || 'New Conversation' })
+                body: JSON.stringify({ title: title || 'New Conversation' }),
+                credentials: 'include'
             });
             const data = await res.json();
             if (data && data.session_id) {
@@ -117,7 +118,7 @@ export default function Sidebar({
         if (!confirm("Delete this session?")) return;
 
         try {
-            await fetch(`${getApiBase()}/sessions/${id}`, { method: 'DELETE' });
+            await fetch(`${getApiBase()}/sessions/${id}`, { method: 'DELETE', credentials: 'include' });
             setSessions(prev => prev.filter(s => s.session_id !== id));
             if (currentSessionId === id) {
                 // If deleted active session, go to root
@@ -277,4 +278,19 @@ export default function Sidebar({
             />
         </>
     );
+}
+
+
+"use client";
+
+export function LogoutButton() {
+    const logout = async () => {
+        await fetch("/api/logout", {
+            method: "POST",
+            credentials: "include",
+        });
+        window.location.href = "/login";
+    };
+
+    return <button onClick={logout}>Logout</button>;
 }
