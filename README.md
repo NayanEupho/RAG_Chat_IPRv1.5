@@ -103,3 +103,7 @@ Visit **http://localhost:3000** to enter the Command Center.
 - [**Embedding Manager Guide**](./Embedding_Manager_Guide.md): Specialized documentation for `embedding_debug.py`.
 - [**RAG Strategies**](./RAG%20Strategies.md): Technical breakdown of the ingestion and retrieval chain.
 - [**Usage Guides**](./Master_Usage.md): Setup and feature documentation for end-users.
+
+---
+
+*Note: This codebase has undergone a comprehensive documentation overhaul (v1.6.1), including module-level docstrings, enhanced internal comments, and Git maintenance (gitignore/gitkeep).*

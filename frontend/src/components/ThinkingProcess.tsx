@@ -1,4 +1,10 @@
 'use client';
+/**
+ * Thinking Process Component
+ * --------------------------
+ * Renders the internal 'thoughts' and 'tool calls' of the LangGraph agent.
+ * Provides visual feedback on latency (TTFT) and execution steps.
+ */
 
 import { useState, useEffect } from "react";
 import { ChevronDown, ChevronRight, Cpu, Terminal, AlertCircle, CheckCircle2, BrainCircuit } from "lucide-react";
@@ -13,9 +19,10 @@ interface ThoughtItem {
 interface ThinkingProcessProps {
     thoughts: ThoughtItem[];
     isFinished?: boolean;
+    ttft?: number;
 }
 
-export default function ThinkingProcess({ thoughts, isFinished = false }: ThinkingProcessProps) {
+export default function ThinkingProcess({ thoughts, isFinished = false, ttft }: ThinkingProcessProps) {
     const [isExpanded, setIsExpanded] = useState(!isFinished);
     const [elapsed, setElapsed] = useState(0);
 
@@ -69,6 +76,7 @@ export default function ThinkingProcess({ thoughts, isFinished = false }: Thinki
                 <div className={styles.meta}>
                     <span>{thoughts.length} steps</span>
                     {!isFinished && <span>{elapsed}s</span>}
+                    {isFinished && ttft && <span>TTFT: {(ttft / 1000).toFixed(2)}s</span>}
                 </div>
             </button>
 

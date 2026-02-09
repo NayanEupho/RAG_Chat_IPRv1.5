@@ -1,3 +1,11 @@
+"""
+Query Rewriting & Semantic Mapping Node
+---------------------------------------
+This node transforms the user query into a structured 'Semantic Map'.
+It resolves ambiguous references (pronouns) using conversation history and 
+breaks down multi-intent requests into targeted file searches.
+"""
+
 from backend.graph.state import AgentState
 from backend.llm.client import OllamaClientWrapper
 from langchain_core.messages import HumanMessage, AIMessage

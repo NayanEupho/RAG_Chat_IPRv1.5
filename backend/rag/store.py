@@ -1,3 +1,10 @@
+"""
+Vector Database Interface (ChromaDB)
+------------------------------------
+Handles persistence and retrieval of document embeddings using ChromaDB.
+Implements a thread-safe singleton pattern for centralized database access.
+"""
+
 import chromadb
 from chromadb.config import Settings
 import os
@@ -5,15 +12,23 @@ import threading
 from typing import List, Dict, Any, Optional
 import logging
 
+# Logger for store operations
 logger = logging.getLogger("rag_chat_ipr.store")
 
 class VectorStore:
+    """
+    Wrapper for ChromaDB operations.
+    Manages collection lifecycle, document indexing, and semantic querying.
+    """
     def __init__(self, persist_dir: str = "chroma_db"):
         self.persist_dir = persist_dir
         self.lock = threading.Lock()
         
         # Initialize ChromaDB Client
-        self.client = chromadb.PersistentClient(path=persist_dir)
+        self.client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False)
+        )
         
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
@@ -64,16 +79,35 @@ class VectorStore:
             return self.collection.count()
 
     def get_all_files(self) -> List[str]:
-        """Returns unique filenames currently indexed."""
+        """Returns unique filenames currently indexed (Scalable Pagination)."""
         try:
-            with self.lock:
-                results = self.collection.get(include=['metadatas'])
             filenames = set()
-            for meta in results['metadatas']:
-                if meta and 'filename' in meta:
-                    filenames.add(meta['filename'])
+            offset = 0
+            limit = 500
+            
+            while True:
+                with self.lock:
+                    results = self.collection.get(
+                        include=['metadatas'],
+                        limit=limit,
+                        offset=offset
+                    )
+                
+                metas = results.get('metadatas', [])
+                if not metas:
+                    break
+                    
+                for meta in metas:
+                    if meta and 'filename' in meta:
+                        filenames.add(meta['filename'])
+                
+                if len(metas) < limit:
+                    break
+                offset += limit
+                
             return list(filenames)
-        except Exception:
+        except Exception as e:
+            logger.error(f"[STORE] Failed to list documents: {e}")
             return []
 
     def delete_file(self, filename: str):
@@ -86,15 +120,23 @@ class VectorStore:
     def clear_all(self):
         """Wipes the entire collection for a complete system reset."""
         with self.lock:
-            # We delete by empty filter or just delete all IDs if needed, 
-            # but PersistentClient.delete_collection is cleaner if we want a total wipe.
-            # However, keeping the collection object is better for active sessions.
-            # We get all IDs and delete them.
-            results = self.collection.get()
-            ids = results.get('ids', [])
-            if ids:
-                self.collection.delete(ids=ids)
-        logger.info("[STORE] Collection cleared. Vector database is now empty.")
+            try:
+                # 1. Total Wipe: Delete the actual collection
+                self.client.delete_collection("rag_documents")
+                # 2. Reset: Recreate with same settings
+                self.collection = self.client.create_collection(
+                    name="rag_documents",
+                    metadata={"hnsw:space": "cosine"}
+                )
+                logger.info("[STORE] Collection wiped and recreated successfully.")
+            except Exception as e:
+                logger.error(f"[STORE] Targeted wipe failed: {e}. Falling back to ID deletion.")
+                # Fallback to slower ID-based deletion
+                results = self.collection.get()
+                ids = results.get('ids', [])
+                if ids:
+                    self.collection.delete(ids=ids)
+        logger.info("[STORE] Global clear operation finished.")
 
 # Singleton
 _store = None

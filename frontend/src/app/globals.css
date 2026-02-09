@@ -620,8 +620,110 @@ button {
   }
 }
 
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin 3s linear infinite;
+}
+
 .animate-fade-in-up {
   animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* Knowledge Base Dashboard Cards */
+.dashboard-file-card {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.dashboard-file-card:hover {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: var(--accent-primary);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.dashboard-file-card:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.file-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.dashboard-file-card:hover .file-icon-wrapper {
+  color: var(--accent-primary) !important;
+  transform: rotate(-5deg);
+}
+
+.dashboard-file-card:hover .file-icon-wrapper svg {
+  color: var(--accent-primary) !important;
+}
+
+.file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.file-action {
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.2s;
+}
+
+.dashboard-file-card:hover .file-action {
+  color: var(--accent-primary);
+}
+
+/* Platinum Document Envelope Presentation */
+.platinum-envelope-container {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  overflow: hidden;
+}
+
+.platinum-envelope-content {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--fg-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  tab-size: 4;
 }
 
 /* Utilities */

@@ -1,4 +1,10 @@
 'use client';
+/**
+ * Sidebar Component
+ * -----------------
+ * Manages the conversation list, session creation/deletion, 
+ * and displays system health/model configuration status.
+ */
 import { Plus, MessageSquare, Menu, Settings, Calendar, Trash2, BrainCircuit } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -53,42 +59,28 @@ export default function Sidebar({
         }
     };
 
-    // Fetch Config (Model Status)
-    const fetchConfig = async () => {
-        try {
-            const res = await fetch(`${getApiBase()}/config`);
-            if (res.ok) {
-                const data = await res.json();
-                setConfig(data);
-            } else {
-                setConfig(null);
-            }
-        } catch (err) {
-            console.error("Failed to load config", err);
-            setConfig(null);
-        }
-    }
 
-    // Check System Health (granular per-model check)
+    // Check System Health (consolidated health & name check)
     const checkHealth = async () => {
         try {
             const res = await fetch(`${getApiBase()}/status`);
             if (res.ok) {
                 const data = await res.json();
-                // Granular model health from new API
                 setMainModelHealthy(data.main_model_healthy === true);
                 setEmbedModelHealthy(data.embed_model_healthy === true);
-                // Overall system health is "ok" only if both are healthy
                 setSystemHealth(data.status === 'ok');
+                setConfig(data); // Store full status as config for names
             } else {
                 setMainModelHealthy(false);
                 setEmbedModelHealthy(false);
                 setSystemHealth(false);
+                setConfig(null);
             }
         } catch (err) {
             setMainModelHealthy(false);
             setEmbedModelHealthy(false);
             setSystemHealth(false);
+            setConfig(null);
         }
     }
 
@@ -133,13 +125,11 @@ export default function Sidebar({
         setMounted(true);
         // Initial Fetch
         fetchSessions();
-        fetchConfig();
         checkHealth();
 
         // Polling (Every 5s)
         const interval = setInterval(() => {
             fetchSessions();
-            fetchConfig();
             checkHealth();
         }, 5000);
 
@@ -238,7 +228,7 @@ export default function Sidebar({
                                 }}></div>
                                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
                                     <span style={{ fontSize: '0.7rem', color: 'var(--fg-muted)' }}>Main Model</span>
-                                    <span style={{ fontWeight: 500 }}>{(config && config.main_model) || 'Disconnected'}</span>
+                                    <span style={{ fontWeight: 500 }}>{config?.main_model_name || 'Disconnected'}</span>
                                 </div>
                             </div>
 
@@ -252,7 +242,7 @@ export default function Sidebar({
                                 }}></div>
                                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
                                     <span style={{ fontSize: '0.7rem', color: 'var(--fg-muted)' }}>Embedding Model</span>
-                                    <span style={{ fontWeight: 500 }}>{(config && config.embed_model) || 'Disconnected'}</span>
+                                    <span style={{ fontWeight: 500 }}>{config?.embed_model_name || 'Disconnected'}</span>
                                 </div>
                             </div>
                         </div>

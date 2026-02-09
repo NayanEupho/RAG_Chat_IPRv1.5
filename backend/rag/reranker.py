@@ -1,3 +1,10 @@
+"""
+Cross-Encoder Reranking Engine (FlashRank)
+-----------------------------------------
+Provides a second-stage retrieval refinement using FlashRank.
+Increases precision by re-scoring vector search candidates using a more powerful model.
+"""
+
 import logging
 import torch
 import asyncio
@@ -7,6 +14,10 @@ from flashrank import Ranker, RerankRequest
 logger = logging.getLogger(__name__)
 
 class Reranker:
+    """
+    Singleton Reranker service.
+    Offloads CPU-intensive ranking tasks to a thread pool to avoid blocking the API.
+    """
     _instance = None
     
     def __new__(cls):
@@ -19,13 +30,14 @@ class Reranker:
         if self._initialized:
             return
         
-        self.model_name = "ms-marco-TinyBERT-L-2-v2"  # Ultra-fast, decent accuracy
-        self.model_path = None  # Downloads auto
+        from backend.config import get_config
+        cfg = get_config()
+        self.model_name = cfg.reranker_model
+        self.model_path = None
         
-        # NOTE: FlashRank internally handles ONNX Runtime providers.
         try:
             is_gpu = torch.cuda.is_available()
-            logger.info(f"Initializing FlashRank Reranker. GPU Available: {is_gpu}")
+            logger.info(f"Initializing FlashRank Reranker ({self.model_name}). GPU Available: {is_gpu}")
             self.ranker = Ranker(model_name=self.model_name)
         except Exception as e:
             logger.error(f"Failed to init FlashRank: {e}")

@@ -1,26 +1,23 @@
+"""
+Intent Routing Node
+-------------------
+The 'Air Traffic Control' of the graph. It uses a hierarchy of decision layers:
+1. Hard-coded mode overrides (Forced Chat/RAG).
+2. Regex-based @mention detection.
+3. Keyword fast-paths.
+4. Vector-based confidence guardrails.
+5. Semantic LLM classification.
+"""
+
 from backend.graph.state import AgentState
 from backend.llm.client import OllamaClientWrapper
+from backend.graph.nodes.constants import CHAT_KEYWORDS, RAG_KEYWORDS
 from langchain_core.messages import HumanMessage, AIMessage
 import re
 import json
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Keywords that suggest the user wants to chat, not search documents
-CHAT_KEYWORDS = [
-    "hello", "hi", "hey", "good morning", "good evening", "how are you",
-    "write me", "compose", "create a", "tell me a joke", "story about",
-    "your opinion", "translate", "code for", "script that"
-]
-
-# Keywords that suggest the user wants to search documents
-RAG_KEYWORDS = [
-    "document", "file", "report", "policy", "according to", "what is",
-    "what does", "summarize", "about", "describe", "find", "search",
-    "look up", "check", "verify", "based on", "compliance", "regulation",
-    "guideline", "procedure", "in the", "from the"
-]
 
 async def route_query(state: AgentState):
     """
@@ -111,10 +108,15 @@ async def route_query(state: AgentState):
         
         results = store.collection.query(query_embeddings=[emb], n_results=1)
         distances = results.get('distances', [[1.0]])[0]
-        has_knowledge = len(distances) > 0 and distances[0] < 0.8 
+        
+        from backend.config import get_config
+        cfg = get_config()
+        threshold = cfg.rag_confidence_threshold
+        
+        has_knowledge = len(distances) > 0 and distances[0] < threshold 
         
         if not has_knowledge and not is_follow_up:
-            logger.info("[ROUTER] Auto: No knowledge found & not a follow-up -> Chat")
+            logger.info(f"[ROUTER] Auto: No knowledge found (Nearest: {distances[0]} >= {threshold}) & not a follow-up -> Chat")
             return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": emb}
             
         # Final arbiter: Semantic LLM intent check

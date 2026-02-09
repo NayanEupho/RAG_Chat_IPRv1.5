@@ -1,27 +1,13 @@
 from backend.graph.state import AgentState
 from backend.llm.client import OllamaClientWrapper
+from backend.graph.nodes.constants import CHAT_KEYWORDS, RAG_KEYWORDS
+from backend.config import get_config
 from langchain_core.messages import HumanMessage
 import logging
 import json
 import re
 
 logger = logging.getLogger(__name__)
-
-# KEYWORDS: Fast-path heuristics to avoid LLM calls for obvious cases.
-# "Chat" keywords suggest pure conversation (Intent: chat).
-CHAT_KEYWORDS = [
-    "hello", "hi", "hey", "good morning", "good evening", "how are you",
-    "write me", "compose", "create a", "tell me a joke", "story about",
-    "your opinion", "translate", "code for", "script that"
-]
-
-# "RAG" keywords suggest an information request (Intent: direct_rag).
-RAG_KEYWORDS = [
-    "document", "file", "report", "policy", "according to", "what is",
-    "what does", "summarize", "about", "describe", "find", "search",
-    "look up", "check", "verify", "based on", "compliance", "regulation",
-    "guideline", "procedure", "in the", "from the"
-]
 
 async def planner_node(state: AgentState):
     """
@@ -84,6 +70,38 @@ async def planner_node(state: AgentState):
             if k in query_lower:
                 logger.info(f"[PLANNER] Fast-Path: Chat (Keyword: '{k}')")
                 return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}
+    
+    # ---------------------------------------------------------
+    # 1D. SPECULATIVE PRE-EMBEDDING & VECTOR GUARDRAIL
+    # ---------------------------------------------------------
+    try:
+        from backend.graph.nodes.retriever import get_cached_embedding
+        from backend.llm.client import OllamaClientWrapper
+        from backend.rag.store import get_vector_store
+        
+        embed_model = OllamaClientWrapper.get_embedding_model_name()
+        
+        # 1. Start Embedding (Speculative)
+        # We AWAIT here for the guardrail if we are in AUTO mode.
+        # Since embedding is ~800ms and LLM is ~3s, this is a safe trade-off for "Fast Abort".
+        q_emb = await get_cached_embedding(cleaned_query, embed_model)
+        
+        if mode == 'auto' and not mentions and q_emb:
+            store = get_vector_store()
+            results = store.query(query_embeddings=[q_emb], n_results=1)
+            distances = results.get('distances', [[1.0]])[0]
+            
+            # GUARDRAIL: Vector-based retrieval confidence check
+            # Uses centralized threshold to decide between RAG and Chat fallback
+            config = get_config()
+            threshold = config.rag_confidence_threshold
+            
+            if len(distances) > 0 and distances[0] > threshold:
+                logger.info(f"[PLANNER] Vector Guardrail: Nearest doc at {distances[0]} > {threshold}. Aborting RAG -> Chat.")
+                return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": q_emb}
+        
+    except Exception as e:
+        logger.debug(f"[PLANNER] Guardrail/Speculative failed: {e}")
 
     # ---------------------------------------------------------
     # 2. THE MEGA-PROMPT (One LLM Call)

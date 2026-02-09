@@ -1,20 +1,31 @@
+"""
+FastAPI Backend Application
+---------------------------
+Initializes the web server, handles CORS, and manages the lifecycle of background services.
+The application entry point includes the automatic startup of the file watchdog service.
+"""
+
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from backend.config import get_config
 import logging
 
-# Configure logging
+# Configure application-wide logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rag_chat_ipr")
 
-# from background_task import BackgroundTasks # Removed incorrect import
 from backend.ingestion.watcher import WatchdogService
 
-# Global service instance
+# Global service instance for the file system monitor
 watchdog_service = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Application Lifespan Context Manager.
+    Handles startup logic (config validation, service initialization)
+    and shutdown logic (resource cleanup).
+    """
     # check config on startup
     config = get_config()
     if not config.is_configured:

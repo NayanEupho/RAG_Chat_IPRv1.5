@@ -1,11 +1,12 @@
 """
-End-to-End Test for RAG Chat IPR
-Simulates the full flow:
-1. Initialize Config (Mocked)
-2. Start API (TestClient)
-3. Ingest Document (Mocked Docling -> Real Chroma)
-4. Query API (Chat)
-5. Verify Response
+End-to-End Test Suite for RAG Chat IPR
+-------------------------------------
+Simulates a full user interaction lifecycle:
+1. Configuration initialization.
+2. API server startup (FastAPI TestClient).
+3. Document ingestion (Mocked processor -> Physical ChromaDB in test dir).
+4. Semantic querying and intent verification.
+5. Response integrity checks.
 """
 
 import os

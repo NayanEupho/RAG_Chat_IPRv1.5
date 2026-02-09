@@ -1,3 +1,10 @@
+"""
+Interactive Startup and Configuration Wizard
+-------------------------------------------
+This module provides the rich-formatted CLI wizard for configuring the RAG system.
+It handles host selection, model validation, and environment variable synchronization.
+"""
+
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
@@ -6,8 +13,9 @@ from rich.live import Live
 from rich import box
 import ollama
 import time
-from backend.config import set_main_model, set_embedding_model
+from backend.config import set_main_model, set_embedding_model, set_rag_workflow
 
+# Shared Rich console for consistent terminal UI
 console = Console()
 
 def format_size(size_bytes: int) -> str:
@@ -55,17 +63,26 @@ def validate_model_on_host(host: str, model_name: str, service_type: str) -> boo
             
             # Check for exact match or tag-less match
             if model_name in model_names or any(m.startswith(f"{model_name}:") for m in model_names):
-                console.print(f"[bold green]✓[/bold green] {service_type} Config Verified: "
-                              f"[cyan]{model_name}[/cyan] found on [yellow]{host}[/yellow].")
+                console.print(Panel(
+                    f"[bold green]✓[/bold green] {service_type} Config Verified!\n"
+                    f"Model: [cyan]{model_name}[/cyan]\n"
+                    f"Host:  [yellow]{host}[/yellow]",
+                    border_style="green",
+                    expand=False
+                ))
                 return True
             else:
-                console.print(f"[bold red]❌ [AVAILABILITY ERROR][/bold red] "
-                              f"Model [cyan]{model_name}[/cyan] not found on [yellow]{host}[/yellow].")
-                console.print(f"[dim]Available models on this host: {', '.join(model_names[:5])}{'...' if len(model_names) > 5 else ''}[/dim]")
+                console.print(Panel(
+                    f"[bold red]❌ [AVAILABILITY ERROR][/bold red]\n"
+                    f"Model [cyan]{model_name}[/cyan] not found on [yellow]{host}[/yellow].\n\n"
+                    f"[dim]Available models: {', '.join(model_names[:5])}{'...' if len(model_names) > 5 else ''}[/dim]",
+                    border_style="red",
+                    expand=False
+                ))
                 return False
                 
     except Exception as e:
-        console.print(f"[bold red]❌ Unexpected Validation Error:[/bold red] {e}")
+        console.print(Panel(f"[bold red]❌ Unexpected Validation Error:[/bold red]\n{e}", border_style="red", expand=False))
         return False
 
 def check_for_env_config() -> bool:
@@ -101,10 +118,15 @@ def check_for_env_config() -> bool:
             t.append(value, style="cyan")
             console.print(t)
 
-        print_var("Main Host:  ", env_vars['RAG_MAIN_HOST'])
-        print_var("Main Model: ", env_vars['RAG_MAIN_MODEL'])
-        print_var("Embed Host: ", env_vars['RAG_EMBED_HOST'])
-        print_var("Embed Model:", env_vars['RAG_EMBED_MODEL'])
+        print_var("Main Host:   ", env_vars['RAG_MAIN_HOST'])
+        print_var("Main Model:  ", env_vars['RAG_MAIN_MODEL'])
+        print_var("Embed Host:  ", env_vars['RAG_EMBED_HOST'])
+        print_var("Embed Model: ", env_vars['RAG_EMBED_MODEL'])
+        
+        # Show RAG_WORKFLOW if present
+        workflow = env_vars.get('RAG_WORKFLOW', 'fused')
+        workflow_desc = "(Fast, 72B+)" if workflow == "fused" else "(Stable, 7B+)"
+        print_var("RAG Workflow:", f" {workflow} {workflow_desc}")
         
         if Confirm.ask("\nImport settings from .env and skip wizard?", default=True):
             # NEW: Post-Confirmation Validation
@@ -114,6 +136,7 @@ def check_for_env_config() -> bool:
             if main_ok and embed_ok:
                 set_main_model(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'])
                 set_embedding_model(env_vars['RAG_EMBED_HOST'], env_vars['RAG_EMBED_MODEL'])
+                set_rag_workflow(workflow)
                 console.print("[bold green]Configuration Loaded from .env and Verified![/bold green]")
                 time.sleep(1) # Visual feedback
                 return True
@@ -148,6 +171,7 @@ def get_and_select_model(host: str, service_type: str) -> str:
             table.add_column("Size", style="green")
             table.add_column("Family", style="yellow")
             table.add_column("Quantization", style="blue")
+            table.add_column("Status", style="bold green")
 
             model_map = {}
             for idx, m in enumerate(models, 1):
@@ -157,7 +181,10 @@ def get_and_select_model(host: str, service_type: str) -> str:
                 size = format_size(m.get('size', 0))
                 name = m['model']
                 
-                table.add_row(str(idx), name, size, family, quant)
+                # If size > 0, it's considered downloaded in this view
+                status = "Downloaded" if m.get('size', 0) > 0 else "Remote"
+                
+                table.add_row(str(idx), name, size, family, quant, status)
                 model_map[str(idx)] = name
 
             console.print(table)
@@ -212,15 +239,26 @@ def run_interactive_config():
             
             embed_model, embed_host = get_and_select_model(embed_host_initial, "Embedding")
 
-            # 3. Confirmation
+            # 3. RAG Workflow Selection
+            console.print("\n[bold yellow]RAG Workflow Mode[/bold yellow]")
+            console.print("1. [cyan]fused[/cyan]   - Fast (1 LLM call). Requires 72B+ model.")
+            console.print("2. [cyan]modular[/cyan] - Stable (3 LLM calls). Good for 7B/14B models.")
+            
+            workflow_choice = Prompt.ask("Select workflow", choices=["1", "2"], default="1")
+            rag_workflow = "fused" if workflow_choice == "1" else "modular"
+
+            # 4. Confirmation
             console.print("\n[bold white on black] Selected Configuration [/bold white on black]")
             console.print(f"Main Model (Chat):      [cyan]{main_model}[/cyan] @ [yellow]{main_host}[/yellow]")
             console.print(f"Embedding Model (RAG):  [cyan]{embed_model}[/cyan] @ [yellow]{embed_host}[/yellow]")
+            workflow_desc = "(Fast)" if rag_workflow == "fused" else "(Stable)"
+            console.print(f"RAG Workflow:           [cyan]{rag_workflow}[/cyan] {workflow_desc}")
             
             if Confirm.ask("\nContinue with this configuration?", default=True):
                 # Apply Configuration
                 set_main_model(main_host, main_model)
                 set_embedding_model(embed_host, embed_model)
+                set_rag_workflow(rag_workflow)
                 console.print("[bold green]Configuration Applied![/bold green]")
                 break
             else:

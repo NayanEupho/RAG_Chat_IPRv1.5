@@ -1,4 +1,10 @@
 "use client";
+/**
+ * Mode Selector Component
+ * ------------------------
+ * Allows users to manually toggle between 'Auto' (Smart Routing),
+ * 'RAG' (Knowledge Base Only), and 'Chat' (Direct LLM) modes.
+ */
 
 import React, { useState } from "react";
 import { ChevronDown, Globe, MessageSquare, Database } from "lucide-react";
