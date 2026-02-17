@@ -15,8 +15,11 @@ def get_connection() -> sqlite3.Connection:
     """Get a thread-local SQLite connection (pseudo connection pooling)."""
     if not hasattr(_local, 'connection') or _local.connection is None:
         _local.connection = sqlite3.connect(DB_PATH, check_same_thread=False)
+        # Enable WAL mode for better concurrency (Zero-copy, high-speed)
+        _local.connection.execute("PRAGMA journal_mode=WAL")
+        _local.connection.execute("PRAGMA synchronous=NORMAL")
         _local.connection.row_factory = sqlite3.Row
-        logger.debug("Created new SQLite connection for thread")
+        logger.debug("Created new SQLite connection with WAL mode enabled")
     return _local.connection
 
 _db_initialized = False
@@ -112,8 +115,11 @@ def add_message(session_id: str, role: str, content: str, intent: str = None, so
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (session_id, role, content, intent, sources_json, metadata_json, thoughts_json)
     )
-    # Update session timestamp
-    conn.execute("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?", (session_id,))
+    # Update session timestamp (Normalized UTC ISO String)
+    conn.execute(
+        "UPDATE sessions SET updated_at = ? WHERE session_id = ?", 
+        (datetime.utcnow().isoformat(), session_id)
+    )
     conn.commit()
 
 def get_all_sessions(user_id: str = None):
@@ -179,6 +185,11 @@ def get_session_owner(session_id: str) -> str:
     cursor = conn.execute("SELECT user_id FROM sessions WHERE session_id = ?", (session_id,))
     row = cursor.fetchone()
     return row['user_id'] if row else None
+
+def is_session_owner(session_id: str, user_id: str) -> bool:
+    """Check if the given user_id owns the session."""
+    owner = get_session_owner(session_id)
+    return owner == user_id
 
 
 def delete_all_sessions():

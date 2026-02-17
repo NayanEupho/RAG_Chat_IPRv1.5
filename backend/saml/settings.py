@@ -22,6 +22,18 @@ class SAMLSettings:
             "SAML_SP_ACS_URL",
             "https://askme.ipr.res.in/saml/acs",
         )
+        self.sp_slo_url = os.getenv(
+            "SAML_SP_SLO_URL",
+            "https://askme.ipr.res.in/saml/slo",
+        )
+        self.sp_cert_file = os.getenv(
+            "SAML_SP_CERT_FILE",
+            "/home/vkpatel/askme.crt", # Default from user's env
+        )
+        self.sp_key_file = os.getenv(
+            "SAML_SP_KEY_FILE",
+            "/home/vkpatel/askme.key", # Default from user's env
+        )
 
         # ===== Identity Provider (ADFS) =====
         self.idp_entity_id = os.getenv(
@@ -34,7 +46,11 @@ class SAMLSettings:
         )
         self.idp_cert_file = os.getenv(
             "SAML_IDP_CERT_FILE",
-            "askme.crt",
+            "idp.crt",
+        )
+        self.idp_slo_url = os.getenv(
+            "SAML_IDP_SLO_URL",
+            "https://adfs.ipr.res.in/adfs/ls/?wa=wsignout1.0",
         )
 
         # ===== Session / JWT =====
@@ -42,11 +58,11 @@ class SAMLSettings:
         # The fallback generates one per process-start (fine for dev, NOT for
         # multi-worker production – tokens won't survive a restart).
         self.session_secret: str = os.getenv(
-            "SESSION_SECRET",
-            secrets.token_hex(32),          # 64-char random fallback
+            "SAML_SESSION_SECRET",          # Match .env
+            os.getenv("SESSION_SECRET", secrets.token_hex(32))
         )
         self.session_max_age: int = int(
-            os.getenv("SESSION_MAX_AGE", "3600")   # default 1 h
+            os.getenv("SAML_SESSION_MAX_AGE", os.getenv("SESSION_MAX_AGE", "3600"))
         )
         self.session_cookie_name: str = os.getenv(
             "SESSION_COOKIE_NAME", "saml_session"
@@ -142,6 +158,82 @@ class SAMLSettings:
         conf.load(self.pysaml2_config())
         conf.allow_unknown_attributes = True
         return Saml2Client(config=conf)
+
+    # ------------------------------------------------------------------
+    # python3-saml (Onelogin) config
+    # ------------------------------------------------------------------
+    def _read_file_clean(self, path: str) -> str:
+        """Helper to read and clean cert/key files for Onelogin."""
+        if not path or not os.path.exists(path):
+            return ""
+        with open(path, "r") as f:
+            content = f.read()
+        return (
+            content
+            .replace("-----BEGIN CERTIFICATE-----", "")
+            .replace("-----END CERTIFICATE-----", "")
+            .replace("-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----END PRIVATE KEY-----", "")
+            .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+            .replace("-----END RSA PRIVATE KEY-----", "")
+            .replace("\n", "")
+            .strip()
+        )
+
+    def to_onelogin_settings(self) -> dict:
+        """
+        Generate setting dict for python3-saml (OneLogin).
+        Use this for OneLogin_Saml2_Auth initialization.
+        """
+        idp_cert = self._read_file_clean(self.idp_cert_file)
+        sp_cert = self._read_file_clean(self.sp_cert_file)
+        sp_key = self._read_file_clean(self.sp_key_file)
+
+        return {
+            "strict": True,
+            "debug": True,
+            "sp": {
+                "entityId": self.sp_entity_id,
+                "assertionConsumerService": {
+                    "url": self.sp_acs_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+                },
+                "singleLogoutService": {
+                    "url": self.sp_slo_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+                },
+                "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
+                "x509cert": sp_cert,
+                "privateKey": sp_key,
+            },
+            "idp": {
+                "entityId": self.idp_entity_id,
+                "singleSignOnService": {
+                    "url": self.idp_sso_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+                },
+                "singleLogoutService": {
+                    "url": self.idp_slo_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+                },
+                "x509cert": idp_cert,
+            },
+            "security": {
+                "nameIdEncrypted": False,
+                "authnRequestsSigned": True, # ADFS often wants this
+                "logoutRequestSigned": True, # ADFS definitely wants this
+                "logoutResponseSigned": False,
+                "signMetadata": False,
+                "wantMessagesSigned": False,
+                "wantAssertionsSigned": False, # Adjust based on ADFS
+                "wantNameId": True,
+                "wantNameIdEncrypted": False,
+                "wantAssertionsEncrypted": False,
+                "allowUnsolicited": True, 
+                "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+                "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
+            }
+        }
 
 
 # ======================================================================

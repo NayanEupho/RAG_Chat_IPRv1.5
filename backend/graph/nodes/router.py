@@ -1,26 +1,23 @@
+"""
+Intent Routing Node
+-------------------
+The 'Air Traffic Control' of the graph. It uses a hierarchy of decision layers:
+1. Hard-coded mode overrides (Forced Chat/RAG).
+2. Regex-based @mention detection.
+3. Keyword fast-paths.
+4. Vector-based confidence guardrails.
+5. Semantic LLM classification.
+"""
+
 from backend.graph.state import AgentState
 from backend.llm.client import OllamaClientWrapper
+from backend.graph.nodes.constants import CHAT_KEYWORDS, RAG_KEYWORDS
 from langchain_core.messages import HumanMessage, AIMessage
 import re
 import json
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Keywords that suggest the user wants to chat, not search documents
-CHAT_KEYWORDS = [
-    "hello", "hi", "hey", "good morning", "good evening", "how are you",
-    "write me", "compose", "create a", "tell me a joke", "story about",
-    "your opinion", "translate", "code for", "script that"
-]
-
-# Keywords that suggest the user wants to search documents
-RAG_KEYWORDS = [
-    "document", "file", "report", "policy", "according to", "what is",
-    "what does", "summarize", "about", "describe", "find", "search",
-    "look up", "check", "verify", "based on", "compliance", "regulation",
-    "guideline", "procedure", "in the", "from the"
-]
 
 async def route_query(state: AgentState):
     """
@@ -34,7 +31,8 @@ async def route_query(state: AgentState):
     if mode == 'chat':
         # Even if they select @file, if they forced 'Chat', we honor the mode for pure LLM interaction
         logger.info("[ROUTER] Mode: Forced Chat")
-        return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}
+        # Preserve documents from previous RAG turns for source persistence
+        return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": state.get('documents', []), "semantic_queries": [], "query_embedding": None}
     
     # Check for mentions regardless of mode if RAG is involved
     mentions = re.findall(r"@([\w\-\. ]+?)(?=[,.;:!?\s]|$)", original_query)
@@ -93,7 +91,8 @@ async def route_query(state: AgentState):
     for keyword in CHAT_KEYWORDS:
         if keyword in query_lower:
             logger.info(f"[ROUTER] Auto Fast-Path: chat (Keyword: '{keyword}')")
-            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": None}
+            # Preserve documents from previous RAG turns for source persistence
+            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": state.get('documents', []), "semantic_queries": [], "query_embedding": None}
 
     # --- STEP 2: AUTO MODE (SOTA SEMANTIC + VECTOR CHECK) ---
     # This is the "Smart" part. We check if the Knowledge Base actually contains relevant info.
@@ -111,11 +110,17 @@ async def route_query(state: AgentState):
         
         results = store.collection.query(query_embeddings=[emb], n_results=1)
         distances = results.get('distances', [[1.0]])[0]
-        has_knowledge = len(distances) > 0 and distances[0] < 0.8 
+        
+        from backend.config import get_config
+        cfg = get_config()
+        threshold = cfg.rag_confidence_threshold
+        
+        has_knowledge = len(distances) > 0 and distances[0] < threshold 
         
         if not has_knowledge and not is_follow_up:
-            logger.info("[ROUTER] Auto: No knowledge found & not a follow-up -> Chat")
-            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": emb}
+            logger.info(f"[ROUTER] Auto: No knowledge found (Nearest: {distances[0]} >= {threshold}) & not a follow-up -> Chat")
+            # Preserve documents from previous RAG turns for source persistence
+            return {"intent": "chat", "query": original_query, "targeted_docs": [], "documents": state.get('documents', []), "semantic_queries": [], "query_embedding": emb}
             
         # Final arbiter: Semantic LLM intent check
         client = OllamaClientWrapper.get_chat_model()
@@ -148,7 +153,9 @@ async def route_query(state: AgentState):
         
         logger.info(f"[ROUTER] Auto Semantic Intent: {intent}")
         # Pass the embedding to retriever to avoid duplicate API call
-        return {"intent": intent, "query": original_query, "targeted_docs": [], "documents": [], "semantic_queries": [], "query_embedding": emb}
+        # Preserve documents from previous RAG turns for source persistence when intent is chat
+        docs_value = state.get('documents', []) if intent == "chat" else []
+        return {"intent": intent, "query": original_query, "targeted_docs": [], "documents": docs_value, "semantic_queries": [], "query_embedding": emb}
             
     except Exception as e:
         logger.warning(f"[ROUTER] Smart Routing failed: {e}. Defaulting to RAG for safety.")

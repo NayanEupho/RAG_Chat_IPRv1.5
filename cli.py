@@ -1,3 +1,10 @@
+"""
+RAG Chat CLI Client
+-------------------
+A rich-formatted command line interface for interacting with the RAG Chat API.
+Supports streaming responses, status updates, and session persistence.
+"""
+
 import asyncio
 import argparse
 import aiohttp
@@ -11,19 +18,30 @@ from rich.spinner import Spinner
 from rich.text import Text
 from rich.panel import Panel
 
+# Initialize Rich console for beautiful terminal output
 console = Console()
 SESSION_FILE = ".cli_session"
 
 def get_session_id():
+    """
+    Retrieves or generates a unique session ID for the CLI client.
+    Persistence is handled via the .cli_session file.
+    """
     if os.path.exists(SESSION_FILE):
         with open(SESSION_FILE, 'r') as f:
              return f.read().strip()
+    
+    # Generate a new session ID based on PID and timestamp
     session_id = f"cli_{os.getpid()}_{int(asyncio.get_event_loop().time())}"
     with open(SESSION_FILE, 'w') as f:
         f.write(session_id)
     return session_id
 
 async def chat_loop(api_url: str):
+    """
+    Main interactive chat loop.
+    Handles user input, API requests, and streaming response rendering.
+    """
     session_id = get_session_id()
     console.print(f"[bold green]Connected to RAG Chat v1.6 (Session: {session_id})[/bold green]")
     console.print("Type 'exit' to quit. Streaming & Status enabled.")

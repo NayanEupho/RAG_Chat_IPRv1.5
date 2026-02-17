@@ -1,3 +1,13 @@
+"""
+Generation Node
+---------------
+This node is responsible for synthesizing the final answer using the retrieved 
+documents and conversation history. It implements:
+- Adaptive prompting (Style control).
+- Context window management (Trimming & Token budgeting).
+- Citation injection for transparency.
+"""
+
 from backend.graph.state import AgentState
 from backend.llm.client import OllamaClientWrapper
 from langchain_core.messages import HumanMessage, AIMessage
@@ -5,10 +15,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Token budget for context - adjust based on model context window
-# qwen2.5:72b-instruct has 128k context, so we can be generous
-# 8000 tokens leaves room for chat history + system prompt + generation
-MAX_CONTEXT_TOKENS = 8000
+# Configurable token threshold for LLM context injection
+MAX_CONTEXT_TOKENS = 6000
 
 def estimate_tokens(text: str) -> int:
     """
@@ -88,9 +96,9 @@ async def generate_answer(state: AgentState):
         f"{style_instruction}\n"
         "Session Awareness: You have access to the conversation history. Maintain continuity.\n"
         "Adaptive Knowledge Usage:\n"
-        "1. If a <knowledge_base> is provided, use it ONLY if it is relevant to the user's latest query.\n"
-        "2. If the user is just saying 'thanks', 'hello', or asking a general question unrelated to the documents, ignore the Knowledge Base and answer naturally.\n"
-        "3. Always prioritize a natural conversational flow."
+        "1. If a <knowledge_base> is provided, use it ONLY if it is directly relevant to the user's latest query.\n"
+        "2. If the provided documents are irrelevant to the user's question, ignore them and answer naturally or state that the info isn't in your files.\n"
+        "3. Always prioritize a natural conversational flow and factual accuracy."
     )
     
     # 4. PROMPT CONSTRUCTION
@@ -116,12 +124,16 @@ Question: {state.get('query', messages[-1].content)}
 """
         # Replace the last user message's content with the RAG-augmented prompt
         # but keep it in the sequence for history consistency
-        final_messages = []
+        final_messages = [
+            {"role": "system", "content": system_instruction}
+        ]
+        
+        # Add History
         for m in trimmed_messages[:-1]:
             role = "user" if isinstance(m, HumanMessage) else "assistant"
             final_messages.append({"role": role, "content": m.content})
             
-        final_messages.append({"role": "system", "content": system_instruction})
+        # Add RAG-Augmented Query
         final_messages.append({"role": "user", "content": rag_prompt})
     else:
         # PURE CHAT MODE
@@ -130,7 +142,9 @@ Question: {state.get('query', messages[-1].content)}
             role = "user" if isinstance(m, HumanMessage) else "assistant"
             final_messages.append({"role": role, "content": m.content})
     
-    # Using model.ainvoke will be intercepted by streaming logic in routes.py
-    response = await client.ainvoke(final_messages)
+    # Using model.astream to ensure real-time events are emitted for astream_events
+    full_content = ""
+    async for chunk in client.astream(final_messages):
+        full_content += chunk.content
     
-    return {"messages": [response]}
+    return {"messages": [AIMessage(content=full_content)]}

@@ -25,6 +25,6 @@ export function middleware(request: NextRequest) {
 // Protect all routes except static assets and API
 export const config = {
     matcher: [
-        '/((?!api|_next/static|_next/image|favicon.ico).*)',
+        '/((?!api|saml|logged-out|_next/static|_next/image|favicon.ico).*)',
     ],
 };

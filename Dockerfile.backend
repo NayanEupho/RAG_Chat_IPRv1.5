@@ -1,30 +1,53 @@
-# Use Python 3.13 slim image as base
-FROM python:3.13-slim
+# Stage 1: Builder
+FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies (build tools and basic libs for document processing)
-RUN apt-get update && apt-get install -y \
+# Install build dependencies
+# Clean up apt cache immediately to keep layer small
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libxml2-dev \
+    libxmlsec1-dev \
+    libxmlsec1-openssl \
+    pkg-config \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency definition
+# Copy only dependency definition first to leverage Docker cache
 COPY pyproject.toml ./
 
-# Install Python dependencies defined in pyproject.toml
-# We install these globally in the container
-RUN pip install --no-cache-dir .
-RUN apt-get update && apt-get install -y \
+# Install dependencies to a tailored location (/install)
+RUN pip install --no-cache-dir --prefix=/install .
+
+# Stage 2: Runner
+FROM python:3.13-slim AS runner
+
+WORKDIR /app
+
+# Set environment variables for optimization
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/usr/local/bin:$PATH"
+
+# Install runtime system dependencies
+# tesseract-ocr and libgl1 are required for Docling/OCR
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libxmlsec1 \
+    libxmlsec1-openssl \
     xmlsec1 \
+    tesseract-ocr \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the entire application code
+# Copy installed python dependencies from builder
+COPY --from=builder /install /usr/local
+
+# Copy the application code
+# Ensure .dockerignore excludes frontend/ and other unnecessary files
 COPY . .
 
-# Expose the API port
 EXPOSE 8000
 
-# Start the application using uvicorn directly.
-# This bypasses main.py's interactive config and relies on env vars.
+# Start the application
 CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]

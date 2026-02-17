@@ -1,3 +1,9 @@
+"""
+Streaming & API Logic Tests
+---------------------------
+Verifies the token-by-token streaming response mechanism for LangGraph.
+Ensures events are correctly formatted and yielded to the client.
+"""
 import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch

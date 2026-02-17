@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, JSONResponse
 import logging
 import base64
 from lxml import etree
@@ -8,7 +8,7 @@ from saml2.client import Saml2Client
 from saml2 import BINDING_HTTP_POST, BINDING_HTTP_REDIRECT
 
 from .settings import get_saml_client
-from .auth import SAMLUser, create_session_response, create_logout_response
+from .auth import SAMLUser, create_session_response, create_logout_response, verify_session_token
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +30,19 @@ SAML_NS = {
 def parse_saml_xml(xml_string: str) -> dict:
     """
     Parse raw SAML Response XML with lxml.
-    Returns  { "name_id": str, "attributes": {name: [values]} }
+    Returns  { "name_id": str, "session_index": str, "attributes": {name: [values]} }
     """
     root = etree.fromstring(xml_string.encode("utf-8"))
 
     name_id_el = root.find(".//saml:Assertion/saml:Subject/saml:NameID", SAML_NS)
     name_id    = name_id_el.text if name_id_el is not None else None
+
+    session_index_el = root.find(".//saml:Assertion", SAML_NS)
+    session_index = session_index_el.get("SessionIndex") if session_index_el is not None else None
+    if not session_index:
+        # Some IdPs put it in AuthStatement
+        auth_stmt = root.find(".//saml:Assertion/saml:AuthnStatement", SAML_NS)
+        session_index = auth_stmt.get("SessionIndex") if auth_stmt is not None else None
 
     attributes: dict[str, list[str]] = {}
     for attr in root.findall(
@@ -47,7 +54,7 @@ def parse_saml_xml(xml_string: str) -> dict:
         ]
         attributes[attr_name] = attr_values
 
-    return {"name_id": name_id, "attributes": attributes}
+    return {"name_id": name_id, "session_index": session_index, "attributes": attributes}
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +137,7 @@ async def saml_acs(request: Request):
         # Attempt 1 – let pysaml2 do everything (base64 string input)
         # ==================================================================
         name_id    = None
+        session_index = None
         attributes = {}
 
         try:
@@ -139,6 +147,8 @@ async def saml_acs(request: Request):
                 binding=BINDING_HTTP_POST,
             )
             name_id    = authn_response.assertion.subject.name_id.text
+            if authn_response.assertion.authn_statement:
+                session_index = authn_response.assertion.authn_statement[0].session_index
             attributes = authn_response.ava or {}
             logger.info("✓ Attempt 1 succeeded (pysaml2 full parse)")
 
@@ -169,6 +179,8 @@ async def saml_acs(request: Request):
                 resp.verify()                          # populates .assertion
 
                 name_id    = resp.assertion.subject.name_id.text
+                if resp.assertion.authn_statement:
+                    session_index = resp.assertion.authn_statement[0].session_index
                 attributes = resp.ava or {}
                 logger.info("✓ Attempt 2 succeeded (pysaml2 loads+verify)")
 
@@ -182,6 +194,7 @@ async def saml_acs(request: Request):
                     logger.debug("Attempt 3: direct lxml XML parse")
                     parsed     = parse_saml_xml(saml_response_xml)
                     name_id    = parsed["name_id"]
+                    session_index = parsed.get("session_index")
                     attributes = parsed["attributes"]
                     logger.info("✓ Attempt 3 succeeded (direct lxml parse)")
 
@@ -204,18 +217,15 @@ async def saml_acs(request: Request):
         logger.info(
             f"✓ SAML login successful  | user={name_id}  email={friendly['email']}"
         )
-        logger.debug(f"Raw attributes: {attributes}")
 
-        # Build the SAMLUser model that auth.py needs
         user = SAMLUser(
             user_id=name_id,
             email=friendly["email"],
             display_name=friendly["display_name"],
+            session_index=session_index,
             attributes=attributes,
         )
 
-        # create_session_response signs a JWT, sets the cookie, and
-        # returns a 303 redirect to relay_state (the original "next" URL)
         return create_session_response(user, redirect_url=relay_state)
 
     except HTTPException:
@@ -253,32 +263,53 @@ async def saml_metadata():
         raise HTTPException(status_code=500, detail=f"Failed to generate metadata: {str(e)}")
 
 
-@router.get("/logout")
-async def saml_logout(next: str = "/"):
-    """Clears the session cookie and redirects."""
-    logger.info("SAML logout requested")
-    return create_logout_response(redirect_url=next)
+@router.api_route("/logout", methods=["GET", "POST"])
+async def saml_logout(request: Request, next: str = "/"):
+    """
+    Local logout: clears session cookie and redirects to IdP SLO.
+    """
+    logger.info(f"SAML logout requested | next={next}")
+
+    try:
+        from .settings import get_saml_settings
+        settings = get_saml_settings()
+        
+        # 1. Clear session index if possible
+        session_cookie = request.cookies.get(settings.session_cookie_name)
+        if session_cookie:
+            user = verify_session_token(session_cookie)
+            if user and user.session_index:
+                from .auth import revoke_session
+                revoke_session(user.session_index)
+
+        # 2. Redirect to IDP Logout (Shotgun approach for cookies)
+        logout_url = settings.idp_slo_url
+        logger.info(f"Redirecting to ADFS for Logout: {logout_url}")
+        
+        from .auth import create_logout_response
+        return create_logout_response(redirect_url=logout_url)
+
+    except Exception as e:
+        logger.exception("Error during logout")
+        return create_logout_response(redirect_url="/")
+
 
 @router.get("/check")
 async def saml_check(request: Request):
     """
     Check if user is authenticated via SAML session (JWT cookie).
     """
-    session_cookie = request.cookies.get("saml_session")
+    from .settings import get_saml_settings
+    settings = get_saml_settings()
+    session_cookie = request.cookies.get(settings.session_cookie_name)
 
     if not session_cookie:
-        raise HTTPException(
-            status_code=401,
-            detail="No active SAML session"
-        )
+        raise HTTPException(status_code=401, detail="No active SAML session")
 
     user = verify_session_token(session_cookie)
 
     if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired SAML session"
-        )
+        raise HTTPException(status_code=401, detail="Invalid or expired SAML session")
 
     return JSONResponse(
         status_code=200,
@@ -292,3 +323,13 @@ async def saml_check(request: Request):
             },
         },
     )
+
+
+@router.get("/slo")
+async def saml_slo_response(request: Request):
+    """
+    Handles LogoutResponse from IdP (or final return).
+    """
+    relay_state = request.query_params.get("RelayState", "/")
+    logger.info(f"SLO callback reached, returning to {relay_state}")
+    return create_logout_response(redirect_url=relay_state)

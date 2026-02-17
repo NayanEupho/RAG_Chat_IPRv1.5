@@ -1,3 +1,10 @@
+"""
+Ollama API Client Wrapper
+-------------------------
+Manages connections to Ollama for both chat (inference) and embedding tasks.
+Includes intelligent client caching per event loop and LangChain integration.
+"""
+
 import ollama
 import asyncio
 import weakref
@@ -5,11 +12,14 @@ from langchain_ollama import ChatOllama
 from backend.config import get_config
 from typing import Dict
 
-# Cache AsyncClient instances per event loop to avoid repeated connection setup.
-# Uses WeakKeyDictionary so clients are garbage-collected when the loop is gone.
+# Cache for AsyncClient instances to prevent connection leakage across loops
 _loop_client_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 class OllamaClientWrapper:
+    """
+    Factory for retrieving pre-configured Ollama clients.
+    Adapts client creation to the current execution context (async vs sync).
+    """
     @classmethod
     def get_client(cls, host: str) -> ollama.AsyncClient:
         """

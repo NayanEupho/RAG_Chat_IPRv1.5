@@ -1,3 +1,9 @@
+"""
+Mocked RAG Pipeline Integration Tests
+-------------------------------------
+Validates the LangGraph orchestration using mocked LLM and Vector Store components.
+Ensures state transitions and node execution flow without real model inference.
+"""
 import pytest
 import logging
 import os

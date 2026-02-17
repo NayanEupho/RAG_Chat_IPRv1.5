@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useEffect, useState, ReactNode } from 'react';
+import React, { useEffect, useState, ReactNode, useCallback } from 'react';
 import { AuthContext } from '@/hooks/useAuth';
 
 interface User {
     user_id: string;
     email?: string;
     display_name?: string;
+    attributes?: Record<string, unknown>;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -14,37 +15,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(true);
 
     const getApiBase = () => {
-        const hostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-        return `https://${hostname}:443`;
+        if (typeof window === 'undefined') return '';
+        return `${window.location.protocol}//${window.location.host}`;
     };
 
     const login = () => {
         window.location.href = `${getApiBase()}/saml/login`;
     };
 
-    const logout = async () => {
-        try {
-            // Call backend logout to clear cookie
-            await fetch(`${getApiBase()}/saml/logout`);
-            setUser(null);
-            // Optional: Redirect to login or home
-            window.location.href = '/';
-        } catch (e) {
-            console.error("Logout failed", e);
-        }
+    const logout = () => {
+        // Use full page redirect to ensure browser processes the Set-Cookie header correctly.
+        // We redirect to /logged-out to avoid the auto-re-login loop.
+        const logoutUrl = `${getApiBase()}/saml/logout?next=/logged-out`;
+        console.log("Initiating logout using URL:", logoutUrl);
+        window.location.href = logoutUrl;
     };
 
-    const checkAuth = async () => {
+    const checkAuth = useCallback(async () => {
         try {
             const res = await fetch(`${getApiBase()}/saml/check`, {
                 credentials: 'include', // Important: send cookies
             });
             const data = await res.json();
-            if (data.authenticated) {
+            if (data.authenticated && data.user) {
                 setUser({
-                    user_id: data.user_id,
-                    email: data.email,
-                    display_name: data.display_name,
+                    user_id: data.user.user_id,
+                    email: data.user.email,
+                    display_name: data.user.display_name,
+                    attributes: data.user.attributes,
                 });
             } else {
                 setUser(null);
@@ -55,11 +53,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
         checkAuth();
-    }, []);
+    }, [checkAuth]);
 
     return (
         <AuthContext.Provider value={{ user, loading, login, logout, checkAuth }}>

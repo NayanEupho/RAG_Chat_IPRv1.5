@@ -1,9 +1,10 @@
-import { useState, useEffect, useContext, createContext } from 'react';
+import { useContext, createContext } from 'react';
 
 interface User {
     user_id: string;
     email?: string;
     display_name?: string;
+    attributes?: Record<string, unknown>;
 }
 
 interface AuthContextType {

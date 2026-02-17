@@ -1,7 +1,12 @@
 'use client';
-import { Plus, MessageSquare, Menu, Settings, Calendar, Trash2, BrainCircuit } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+/**
+ * Sidebar Component
+ * -----------------
+ * Manages the conversation list, session creation/deletion, 
+ * and displays system health/model configuration status.
+ */
+import { Plus, Menu, Trash2, BrainCircuit } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
 import NewChatModal from './NewChatModal';
 
 interface Session {
@@ -10,36 +15,41 @@ interface Session {
     updated_at: string;
 }
 
+interface SystemStatus {
+    status: string;
+    main_model_healthy: boolean;
+    main_model_name: string;
+    embed_model_healthy: boolean;
+    embed_model_name: string;
+}
+
 export default function Sidebar({
     currentSessionId,
-    onSelectSession,
-    onNewChat
+    onSelectSession
 }: {
     currentSessionId: string,
-    onSelectSession: (id: string) => void,
-    onNewChat?: () => void
+    onSelectSession: (id: string) => void
 }) {
     const [sessions, setSessions] = useState<Session[]>([]);
-    const [config, setConfig] = useState<any>(null);
+    const [config, setConfig] = useState<SystemStatus | null>(null);
     const [systemHealth, setSystemHealth] = useState<boolean>(false);
     const [mainModelHealthy, setMainModelHealthy] = useState<boolean>(false);
     const [embedModelHealthy, setEmbedModelHealthy] = useState<boolean>(false);
     const [isOpen, setIsOpen] = useState(true);
     const [mounted, setMounted] = useState(false);
     const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
-    const router = useRouter();
 
     // Dynamic API Base Detection
-    const getApiBase = () => {
+    const getApiBase = useCallback(() => {
         if (typeof window !== 'undefined') {
             const hostname = window.location.hostname;
             return `https://${hostname}:443/api`;
         }
         return 'http://localhost:8000/api';
-    };
+    }, []);
 
     // Fetch sessions
-    const fetchSessions = async () => {
+    const fetchSessions = useCallback(async () => {
         try {
             const res = await fetch(`${getApiBase()}/sessions`, { credentials: 'include' });
             const data = await res.json();
@@ -48,50 +58,33 @@ export default function Sidebar({
             } else {
                 setSessions([]);
             }
-        } catch (err) {
-            console.error("Failed to load sessions", err);
+        } catch {
+            console.error("Failed to load sessions");
         }
-    };
+    }, [getApiBase]);
 
-    // Fetch Config (Model Status)
-    const fetchConfig = async () => {
-        try {
-            const res = await fetch(`${getApiBase()}/config`, { credentials: 'include' });
-            if (res.ok) {
-                const data = await res.json();
-                setConfig(data);
-            } else {
-                setConfig(null);
-            }
-        } catch (err) {
-            console.error("Failed to load config", err);
-            setConfig(null);
-        }
-    }
-
-    // Check System Health (granular per-model check)
-    const checkHealth = async () => {
+    // Check System Health (consolidated health & name check)
+    const checkHealth = useCallback(async () => {
         try {
             const res = await fetch(`${getApiBase()}/status`, { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
-                // Granular model health from new API
                 setMainModelHealthy(data.main_model_healthy === true);
                 setEmbedModelHealthy(data.embed_model_healthy === true);
-                // Overall system health is "ok" only if both are healthy
                 setSystemHealth(data.status === 'ok');
+                setConfig(data); // Store full status as config for names
             } else {
                 setMainModelHealthy(false);
                 setEmbedModelHealthy(false);
                 setSystemHealth(false);
+                setConfig(null);
             }
-        } catch (err) {
+        } catch {
             setMainModelHealthy(false);
             setEmbedModelHealthy(false);
             setSystemHealth(false);
         }
-    }
-
+    }, [getApiBase]);
     const handleCreateSession = async (title: string) => {
         try {
             const res = await fetch(`${getApiBase()}/sessions`, {
@@ -134,18 +127,16 @@ export default function Sidebar({
         setMounted(true);
         // Initial Fetch
         fetchSessions();
-        fetchConfig();
         checkHealth();
 
         // Polling (Every 5s)
         const interval = setInterval(() => {
             fetchSessions();
-            fetchConfig();
             checkHealth();
         }, 5000);
 
         return () => clearInterval(interval);
-    }, []);
+    }, [fetchSessions, checkHealth]);
 
     if (!mounted) return null;
 
@@ -239,7 +230,7 @@ export default function Sidebar({
                                 }}></div>
                                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
                                     <span style={{ fontSize: '0.7rem', color: 'var(--fg-muted)' }}>Main Model</span>
-                                    <span style={{ fontWeight: 500 }}>{(config && config.main_model) || 'Disconnected'}</span>
+                                    <span style={{ fontWeight: 500 }}>{config?.main_model_name || 'Disconnected'}</span>
                                 </div>
                             </div>
 
@@ -253,7 +244,7 @@ export default function Sidebar({
                                 }}></div>
                                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
                                     <span style={{ fontSize: '0.7rem', color: 'var(--fg-muted)' }}>Embedding Model</span>
-                                    <span style={{ fontWeight: 500 }}>{(config && config.embed_model) || 'Disconnected'}</span>
+                                    <span style={{ fontWeight: 500 }}>{config?.embed_model_name || 'Disconnected'}</span>
                                 </div>
                             </div>
                         </div>
@@ -281,16 +272,3 @@ export default function Sidebar({
 }
 
 
-"use client";
-
-export function LogoutButton() {
-    const logout = async () => {
-        await fetch("/api/logout", {
-            method: "POST",
-            credentials: "include",
-        });
-        window.location.href = "/login";
-    };
-
-    return <button onClick={logout}>Logout</button>;
-}

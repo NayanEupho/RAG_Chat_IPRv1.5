@@ -28,6 +28,7 @@ class SAMLUser(BaseModel):
     user_id:      str
     email:        Optional[str]                          = None
     display_name: Optional[str]                          = None
+    session_index: Optional[str]                         = None
     attributes:   Dict[str, list]                        = Field(default_factory=dict)
 
 
@@ -43,6 +44,8 @@ def create_session_token(user: SAMLUser) -> str:
         "sub":          user.user_id,
         "email":        user.email,
         "display_name": user.display_name,
+        "session_index": user.session_index,
+        "attributes":   user.attributes,
         "iat":          int(now.timestamp()),
         "exp":          int((now + timedelta(seconds=settings.session_max_age)).timestamp()),
     }
@@ -65,6 +68,8 @@ def verify_session_token(token: str) -> Optional[SAMLUser]:
             user_id=payload["sub"],
             email=payload.get("email"),
             display_name=payload.get("display_name"),
+            session_index=payload.get("session_index"),
+            attributes=payload.get("attributes", {}),
         )
 
     except jwt.ExpiredSignatureError:
@@ -89,6 +94,24 @@ def get_session_from_cookie(request: Request) -> Optional[SAMLUser]:
 
 
 # ===========================================================================
+# Session Blacklist (In-Memory)
+# Prevents "Zombie Sessions" where the browser refuses to delete the cookie
+# ===========================================================================
+# In production, use Redis/Database. For memory-persistence, a set is fine for now.
+LOGOUT_BLACKLIST = set()
+
+def revoke_session(session_index: str):
+    """Mark a session token as revoked."""
+    if session_index:
+        LOGOUT_BLACKLIST.add(session_index)
+        logger.info(f"Session {session_index} revoked")
+
+def is_session_revoked(session_index: str) -> bool:
+    """Check if session is in the blacklist."""
+    return session_index in LOGOUT_BLACKLIST
+
+
+# ===========================================================================
 # FastAPI dependencies  –  drop these into any route that needs auth
 # ===========================================================================
 async def get_current_user(request: Request) -> SAMLUser:
@@ -107,6 +130,12 @@ async def get_current_user(request: Request) -> SAMLUser:
             detail="Not authenticated. Login at /saml/login",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Check if session has been revoked (Logout Blacklist)
+    if user.session_index and is_session_revoked(user.session_index):
+        logger.warning(f"Rejected revoked session: {user.session_index}")
+        raise HTTPException(status_code=401, detail="Session revoked")
+        
     return user
 
 
@@ -147,16 +176,46 @@ def create_session_response(user: SAMLUser, redirect_url: str = "/") -> Redirect
     return response
 
 
-def create_logout_response(redirect_url: str = "/") -> RedirectResponse:
+def create_logout_response(redirect_url: str = "/", user: Optional[SAMLUser] = None) -> RedirectResponse:
     """
-    Build a redirect that deletes the session cookie.
-    This is what /logout calls.
+    Build a redirect that deletes the session cookie AND revokes it server-side.
     """
     settings = get_saml_settings()
 
+    # Server-side revocation (Kill it with fire)
+    if user and user.session_index:
+        revoke_session(user.session_index)
+
     response = RedirectResponse(url=redirect_url, status_code=303)
+    
+    # 1. Standard delete (Host only, current path)
     response.delete_cookie(key=settings.session_cookie_name, path="/")
-    logger.info("Session cookie deleted (logout)")
+    
+    # 2. Explicit overwrites with Max-Age=0 (The "Shotgun" Approach)
+    
+    # Attempt 1: Standard match (Host only)
+    response.set_cookie(
+        key=settings.session_cookie_name, 
+        value="", max_age=0, expires=0, path="/", 
+        httponly=True, secure=True, samesite="lax"
+    )
+    
+    # Attempt 2: Root domain wildcard (common in SSO) - try .ipr.res.in
+    response.set_cookie(
+        key=settings.session_cookie_name, 
+        value="", max_age=0, expires=0, path="/", 
+        domain=".ipr.res.in",
+        httponly=True, secure=True, samesite="lax"
+    )
+
+    # Attempt 3: Without SameSite (in case legacy cookie)
+    response.set_cookie(
+        key=settings.session_cookie_name, 
+        value="", max_age=0, expires=0, path="/", 
+        httponly=True, secure=True
+    )
+    
+    logger.info("Session cookie deletion attempted (multi-domain shotgun)")
     return response
 
 
@@ -205,9 +264,9 @@ async def init_saml_auth(request: Request, post_data: dict = None) -> OneLogin_S
         req["post_data"] = post_data
         
     # Get the raw config dict for pysaml2
-    # Note: The existing code in routes.py used a different approach.
-    # We are unifying it here.
-    saml_settings = settings_manager.pysaml2_config() if hasattr(settings_manager, 'pysaml2_config') else settings_manager.to_onelogin_settings()
+    # We use the to_onelogin_settings() method which is now verified to exist in settings.py
+    # This returns the correct dict structure for python3-saml.
+    saml_settings = settings_manager.to_onelogin_settings()
     
     # WARNING: python3-saml (Onelogin) and pysaml2 are DIFFERENT libraries.
     # The user's prompt mentioned "onelogin" but the codebase had `saml2` (pysaml2).

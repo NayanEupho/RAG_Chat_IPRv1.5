@@ -1,13 +1,26 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "standalone",
   eslint: {
-    // Ignore ESLint errors during the build step
     ignoreDuringBuilds: true,
   },
   typescript: {
-    // Optional: Ignore TypeScript errors to ensure build completes
-    ignoreBuildErrors: true, 
-  }
+    ignoreBuildErrors: true,
+  },
+  async rewrites() {
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    return [
+      {
+        source: '/saml/:path*',
+        destination: `${backendUrl}/saml/:path*`,
+      },
+      {
+        source: '/api/:path*',
+        destination: `${backendUrl}/api/:path*`,
+      },
+    ];
+  },
 };
+
 
 module.exports = nextConfig;

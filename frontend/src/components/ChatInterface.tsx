@@ -1,12 +1,22 @@
 'use client';
+/**
+ * Main Chat Interface Component
+ * ----------------------------
+ * The primary view for user interaction. Handles:
+ * - Real-time message rendering with Markdown support.
+ * - @Mention system for file targeting.
+ * - Connection to the RAG backend via useChat hook.
+ * - Navigation and session management.
+ */
 import { useChat } from '@/hooks/useChat';
 import { useRef, useEffect, useState, useCallback } from 'react';
 import Sidebar from './Sidebar';
+import UserMenu from './UserMenu';
 import ThinkingProcess from './ThinkingProcess';
 import { toast } from 'sonner';
 import {
-    Send, Cpu, Database, FileText, ChevronRight, Sparkles,
-    Square, X, Copy, Check, User, Bot, Search, Brain, AtSign, ArrowUpRight, Target, Info
+    Send, Cpu, Database, FileText, ChevronRight,
+    Square, X, Copy, Check, AtSign, Target, Info, ArrowUpRight
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,7 +51,8 @@ export default function ChatInterface() {
     // Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalTitle, setModalTitle] = useState('');
-    const [modalContent, setModalContent] = useState<any>('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [modalContent, setModalContent] = useState<any>([]);
     const [modalType, setModalType] = useState<'source' | 'docs'>('source');
 
     // @Mentions State
@@ -173,6 +184,20 @@ export default function ChatInterface() {
         adjustTextareaHeight();
     };
 
+    /**
+     * Extracts the filename/title from a Platinum Document Envelope string.
+     * Preserves the full structural fidelity of the content for the modal.
+     */
+    const parseEnvelopeTitle = (envelope: string) => {
+        // Handle [Source: filename.pdf | Section: ...] or [Q&A | Source: ...]
+        const match = envelope.match(/Source:\s*([^|\]\n]+)/);
+        if (match && match[1]) {
+            const rawTitle = match[1].trim();
+            return rawTitle.split('/').pop() || rawTitle;
+        }
+        return "Document Chunk";
+    };
+
     const triggerSend = () => {
         if (loading) return;
         if (inputValue.trim()) {
@@ -189,6 +214,20 @@ export default function ChatInterface() {
         setModalContent(fullContent);
         setModalType('source');
         setIsModalOpen(true);
+    };
+
+    const getApiBase = () => {
+        if (typeof window !== 'undefined') {
+            const hostname = window.location.hostname;
+            return `https://${hostname}:443/api`;
+        }
+        return 'http://localhost:8000/api';
+    };
+
+    const handleOpenFile = (filename: string) => {
+        const url = `${getApiBase()}/files/${encodeURIComponent(filename)}`;
+        window.open(url, '_blank');
+        toast.info(`Opening ${filename}...`);
     };
 
     const handleShowDocuments = async () => {
@@ -269,6 +308,7 @@ export default function ChatInterface() {
             />
 
             <div className="main-chat-area">
+                <UserMenu />
                 <div style={{ position: 'absolute', inset: 0, zIndex: 0, opacity: 0.4, background: 'radial-gradient(circle at 50% -20%, rgba(59, 130, 246, 0.15), transparent 70%)', pointerEvents: 'none' }}></div>
 
                 <div className="messages-container">
@@ -301,24 +341,27 @@ export default function ChatInterface() {
 
                                             {/* Thinking Process Integration */}
                                             {msg.thoughts && msg.thoughts.length > 0 && (
-                                                <ThinkingProcess thoughts={msg.thoughts} isFinished={!loading || idx !== messages.length - 1} />
+                                                <ThinkingProcess
+                                                    thoughts={msg.thoughts}
+                                                    isFinished={!loading || idx !== messages.length - 1}
+                                                    ttft={msg.ttft}
+                                                />
                                             )}
 
                                             {/* Premium Source Strip (Top Placement) */}
                                             {msg.sources && msg.sources.length > 0 && (
                                                 <div className="source-strip custom-scrollbar">
                                                     {msg.sources.map((src, i) => {
-                                                        const parts = src.split('\nContent: ');
-                                                        const sourceName = parts[0].replace('Source: ', '');
-                                                        const content = parts[1] || '';
-                                                        const displayTitle = sourceName.split('/').pop() || sourceName;
-                                                        const isTargeted = msg.targeted_docs?.some(d => sourceName.includes(d));
+                                                        // Absolute Text Fidelity: We keep the raw 'src' for the modal.
+                                                        // We only extract a title for the card header.
+                                                        const displayTitle = parseEnvelopeTitle(src);
+                                                        const isTargeted = msg.targeted_docs?.some(d => src.includes(d));
 
                                                         return (
                                                             <button
                                                                 key={i}
                                                                 className="source-strip-card"
-                                                                onClick={() => openSourceModal(sourceName, content)}
+                                                                onClick={() => openSourceModal(displayTitle, src)}
                                                                 title={`View Source ${i + 1}`}
                                                                 style={isTargeted ? { borderColor: 'var(--accent-secondary)', boxShadow: '0 0 8px rgba(59, 130, 246, 0.2)' } : {}}
                                                             >
@@ -327,8 +370,9 @@ export default function ChatInterface() {
                                                                     <FileText size={12} />
                                                                     <div className="source-card-title" style={isTargeted ? { fontWeight: 700 } : {}}>{displayTitle}</div>
                                                                 </div>
-                                                                <div className="source-card-preview">
-                                                                    {content.substring(0, 100)}...
+                                                                <div className="source-card-preview" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
+                                                                    {/* Preview first 100 chars of raw envelope to show structure */}
+                                                                    {src.substring(0, 100)}...
                                                                 </div>
                                                             </button>
                                                         );
@@ -356,7 +400,7 @@ export default function ChatInterface() {
                                         <ReactMarkdown
                                             remarkPlugins={[remarkGfm]}
                                             components={{
-                                                code({ node, className, children, ...props }) {
+                                                code({ className, children, ...props }: { className?: string, children?: React.ReactNode }) {
                                                     const match = /language-(\w+)/.exec(className || '')
                                                     const inline = !className;
                                                     const codeContent = String(children).replace(/\n$/, '');
@@ -380,10 +424,12 @@ export default function ChatInterface() {
                                                                 </button>
                                                             </div>
                                                             <SyntaxHighlighter
+                                                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                                                 style={vscDarkPlus as any}
                                                                 language={match[1]}
                                                                 PreTag="div"
                                                                 customStyle={{ margin: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
+                                                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                                                 {...(props as any)}
                                                             >
                                                                 {codeContent}
@@ -533,31 +579,16 @@ export default function ChatInterface() {
                         </div>
                         <div className="modal-body custom-scrollbar">
                             {modalType === 'source' ? (
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm]}
-                                    components={{
-                                        code({ node, className, children, ...props }) {
-                                            const match = /language-(\w+)/.exec(className || '')
-                                            const inline = !className;
-                                            return !inline && match ? (
-                                                <SyntaxHighlighter
-                                                    style={vscDarkPlus as any}
-                                                    language={match[1]}
-                                                    PreTag="div"
-                                                    {...(props as any)}
-                                                >
-                                                    {String(children).replace(/\n$/, '')}
-                                                </SyntaxHighlighter>
-                                            ) : (
-                                                <code className={className} {...props}>
-                                                    {children}
-                                                </code>
-                                            )
-                                        }
-                                    }}
-                                >
-                                    {modalContent}
-                                </ReactMarkdown>
+                                <div className="platinum-envelope-container">
+                                    {/* 
+                                      * Absolute Text Fidelity Rendering:
+                                      * We use a pre-formatted div to ensure all whitespace, newlines, 
+                                      * and ASCII structures from the main model's context are preserved.
+                                      */}
+                                    <div className="platinum-envelope-content">
+                                        {modalContent}
+                                    </div>
+                                </div>
                             ) : modalContent === 'loading' ? (
                                 <div className="flex flex-col gap-3">
                                     <div style={{ height: '20px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}></div>
@@ -567,14 +598,24 @@ export default function ChatInterface() {
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' }}>
                                     {modalContent && modalContent.length > 0 ? (
                                         modalContent.map((doc: string, i: number) => (
-                                            <div key={i} className="animate-fade-in-up" style={{
-                                                animationDelay: `${i * 0.05}s`,
-                                                padding: '12px', background: 'rgba(255,255,255,0.03)',
-                                                border: '1px solid var(--border-subtle)', borderRadius: '10px',
-                                                display: 'flex', alignItems: 'center', gap: '8px'
-                                            }}>
-                                                <FileText size={20} color="var(--accent-primary)" />
-                                                <div style={{ fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc}</div>
+                                            <div
+                                                key={i}
+                                                className="animate-fade-in-up dashboard-file-card"
+                                                style={{
+                                                    animationDelay: `${i * 0.05}s`,
+                                                    cursor: 'pointer'
+                                                }}
+                                                onClick={() => handleOpenFile(doc)}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <div className="file-icon-wrapper">
+                                                        <FileText size={20} color="var(--accent-primary)" />
+                                                    </div>
+                                                    <div className="file-info">
+                                                        <div className="file-name" title={doc}>{doc}</div>
+                                                        <div className="file-action">Click to open <ArrowUpRight size={10} /></div>
+                                                    </div>
+                                                </div>
                                             </div>
                                         ))
                                     ) : (
@@ -593,14 +634,3 @@ export default function ChatInterface() {
 }
 
 
-export function LogoutButton() {
-    const logout = async () => {
-        await fetch("/saml/logout", {
-            method: "POST",
-            credentials: "include",
-        });
-        window.location.href = "/login";
-    };
-
-    return <button onClick={logout}>Logout</button>;
-}

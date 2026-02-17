@@ -1,3 +1,9 @@
+"""
+Docling Processor Research & Validation
+---------------------------------------
+Standalone script for calibrating Docling parameters (OCR markers, chunk boundaries).
+Used during Phase 4 development of the ingestion engine.
+"""
 from docling.document_converter import DocumentConverter
 import sys
 import os

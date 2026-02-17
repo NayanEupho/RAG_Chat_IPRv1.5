@@ -1,10 +1,19 @@
+"""
+State Checkpointing and Persistence
+-----------------------------------
+Provides mechanisms for saving and restoring the conversation state (LangGraph checkpoints).
+Uses an in-memory saver for async compatibility while maintaining session references 
+in a local SQLite database.
+"""
+
 from langgraph.checkpoint.memory import MemorySaver
 import sqlite3
 import os
 
+# Physical DB used for session metadata, not the actual checkpoints
 DB_PATH = "rag_chat_sessions.db"
 
-# Singleton checkpointer for async compatibility
+# Cache for the checkpointer instance
 _memory_saver = None
 
 def get_checkpointer():
@@ -24,6 +33,7 @@ def get_checkpointer():
     return _memory_saver
 
 def init_db():
+    """Initializes the session metadata database."""
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("VACUUM")
 

@@ -1,0 +1,66 @@
+services:
+  # Service 1: Agent (Backend API)
+  agent-backend-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ipr-rag-agent-prod
+    ports:
+      - "8000:8000"
+    environment:
+      # Connect to Ollama running on the host machine
+      - RAG_MAIN_HOST=http://10.20.39.12:11434
+      - RAG_EMBED_HOST=http://10.20.39.12:11434
+      - RAG_MAIN_MODEL=qwen2.5:72b-instruct
+      - RAG_EMBED_MODEL=embeddinggemma:300m
+      - RAG_WORKFLOW=fused
+
+      # SAML Service Provider Config (This App)
+      - SAML_SP_ENTITY_ID=https://askme.ipr.res.in/metadata
+      - SAML_SP_ACS_URL=https://askme.ipr.res.in/saml/acs
+      - SAML_SP_SLO_URL=https://askme.ipr.res.in/saml/slo
+
+      # SAML Identity Provider Config (ADFS)
+      - SAML_IDP_ENTITY_ID=http://adfs.ipr.res.in/adfs/services/trust
+      - SAML_IDP_SSO_URL=https://adfs.ipr.res.in/adfs/ls
+      - SAML_IDP_SLO_URL=https://adfs.ipr.res.in/adfs/ls/?wa=wsignout1.0
+      - SAML_IDP_CERT_FILE=/app/askme.crt
+
+      # Session Security (Direct Sync with backend/saml/settings.py)
+      - SESSION_SECRET=a8a83724580cdd287aac77326e7ecac604b3833ef442d13668d6b3031f20b47b
+      - SESSION_MAX_AGE=28800
+      - SESSION_COOKIE_NAME=saml_session
+
+      - SAML_ENABLED=true
+      - SAML_DEBUG=true
+      - ANONYMIZED_TELEMETRY=False
+      - INGEST_FORCE_CPU=True
+
+    volumes:
+      # Persist uploaded documents and the vector database
+      - ./upload_docs:/app/upload_docs
+      - ./chroma_db:/app/chroma_db
+      # Optional: Persist SQLite chat history/checkpoints
+      - ./agent_state.db:/app/agent_state.db
+      # Mount the SSO certificate
+      - ./askme.crt:/app/askme.crt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Service 2: GUI (Frontend)
+  gui-frontend-prod:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ipr-rag-gui-prod
+    ports:
+      - "3000:3000"
+    environment:
+      # Next.js telemetry disable (optional)
+      - NEXT_TELEMETRY_DISABLED=1
+      # Explicitly point to the public domain for consistent proxying
+      #- NEXT_PUBLIC_BACKEND_URL=https://askme.ipr.res.in
+    depends_on:
+      - agent-backend-prod
+    restart: unless-stopped
