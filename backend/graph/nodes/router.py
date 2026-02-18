@@ -149,7 +149,7 @@ async def route_query(state: AgentState):
         )
         
         result = json.loads(response.content)
-        intent = result.get("intent", "chat").lower()
+        intent = (result.get("intent") or "chat").lower()
         
         logger.info(f"[ROUTER] Auto Semantic Intent: {intent}")
         # Pass the embedding to retriever to avoid duplicate API call

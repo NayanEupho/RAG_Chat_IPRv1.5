@@ -1,8 +1,5 @@
-import os
 import secrets
 from functools import lru_cache
-from saml2.client import Saml2Client
-from saml2.config import Config
 
 
 class SAMLSettings:
@@ -13,6 +10,7 @@ class SAMLSettings:
     """
 
     def __init__(self):
+        import os
         # ===== Service Provider (THIS APP) =====
         self.sp_entity_id = os.getenv(
             "SAML_SP_ENTITY_ID",
@@ -153,7 +151,9 @@ class SAMLSettings:
     # ------------------------------------------------------------------
     # pysaml2 client
     # ------------------------------------------------------------------
-    def get_client(self) -> Saml2Client:
+    def get_client(self):
+        from saml2.client import Saml2Client
+        from saml2.config import Config
         conf = Config()
         conf.load(self.pysaml2_config())
         conf.allow_unknown_attributes = True
@@ -241,12 +241,12 @@ class SAMLSettings:
 # ======================================================================
 
 @lru_cache()
-def get_saml_settings() -> SAMLSettings:
+def get_saml_settings():
     """Return the one SAMLSettings instance for the whole process."""
     return SAMLSettings()
 
 
 @lru_cache()
-def get_saml_client() -> Saml2Client:
+def get_saml_client():
     """Return the one pysaml2 client for the whole process."""
     return get_saml_settings().get_client()

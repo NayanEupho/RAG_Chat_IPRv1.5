@@ -49,6 +49,7 @@ def main():
     os.environ["RAG_EMBED_MODEL"] = config.embedding_model.model_name
     os.environ["RAG_WORKFLOW"] = config.rag_workflow
     os.environ["INGEST_FORCE_CPU"] = str(config.ingest_force_cpu).lower()
+    os.environ["USE_SAML_LOGIN"] = str(config.use_saml_login).lower()
     
     # We run uvicorn programmatically
     port = int(os.getenv("RAG_PORT", "8000"))

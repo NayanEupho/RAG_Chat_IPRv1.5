@@ -48,17 +48,9 @@ async def chat_endpoint(request: ChatRequest, user: SAMLUser = Depends(get_curre
     """
     try:
         from backend.state.history import is_session_owner
-        if not is_session_owner(request.session_id, user.user_id):
-             # Ensure session exists (defaults to current user if new)
-             # But if it's new, we should create it. 
-             # For legacy/simple chat, we might just proceed if it's 'default'.
-             # Matching working version logic:
-             pass 
-             # Wait, working version threw 403.
-             # "if not is_session_owner... raise HTTPException"
-             
-        # Re-check working version logic from Step 193
-        if not is_session_owner(request.session_id, user.user_id):
+        from backend.config import get_config
+        # In anonymous mode, skip ownership checks — all sessions are accessible
+        if get_config().use_saml_login and not is_session_owner(request.session_id, user.user_id):
             raise HTTPException(status_code=403, detail="Not authorized to access this session")
 
         config = {"configurable": {"thread_id": request.session_id}}
@@ -90,9 +82,10 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
     from backend.state.history import add_message, create_session, is_session_owner, get_session_owner
     
     # Ensure session exists
-    # Check ownership
+    # Check ownership (skip in anonymous mode)
+    from backend.config import get_config
     actual_owner = get_session_owner(request_body.session_id)
-    if actual_owner and actual_owner != user.user_id:
+    if get_config().use_saml_login and actual_owner and actual_owner != user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this session")
 
     create_session(request_body.session_id, user_id=user.user_id)
@@ -107,14 +100,21 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
     }
 
     async def sse_generator():
+        logger.info(f"[STREAM] Starting SSE generator for session {request_body.session_id}")
         full_response = ""
         final_intent = "unknown"
         final_docs = []
         thoughts = []
         
         try:
+            # 1. Flush Padding (Immediate response to stop buffering in proxies)
+            # Increased to 4KB for extreme stability in strict proxies/browsers
+            padding = ":" + (" " * 4096) + " padding to flush buffer\n\n"
+            yield padding
+            
             initial_status = "Protocol Initiated"
             thoughts.append({"type": "status", "content": initial_status})
+            logger.info(f"[STREAM] Emitting status: {initial_status}")
             yield f"event: status\ndata: {initial_status}\n\n"
             
             async for event in get_graph().astream_events(inputs, config=config, version="v1"):
@@ -128,7 +128,7 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                 if event_type == "on_chain_start":
                     name = event["name"]
                     status_data = None
-                    if name == "router":
+                    if name == "router" or name == "planner":
                          status_data = "Analyzing Intent..."
                     elif name == "rewriter":
                          status_data = "Refining Contextual Query..."
@@ -141,6 +141,7 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                          # Append to persistence list
                          type_mapped = "thought" if "Analyzing" in status_data or "Generating" in status_data else "tool_call"
                          thoughts.append({"type": type_mapped, "content": status_data})
+                         logger.info(f"[STREAM] Emitting status: {status_data}")
                          yield f"event: status\ndata: {status_data}\n\n"
 
                 if event_type == "on_chat_model_stream":
@@ -153,6 +154,7 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                             import json
                             clean_token = json.dumps(chunk.content)
                             full_response += chunk.content
+                            # logger.debug(f"[STREAM] Emitting token: {chunk.content[:10]}...") 
                             yield f"event: token\ndata: {clean_token}\n\n"
                     else:
                         logger.warning(f"[STREAM] Token received from unexpected node: {node}")
@@ -190,7 +192,15 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             yield f"event: error\ndata: {str(e)}\n\n"
 
     from fastapi.responses import StreamingResponse
-    return StreamingResponse(sse_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        sse_generator(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
@@ -222,9 +232,10 @@ def get_history(session_id: str, user: SAMLUser = Depends(get_current_user)):
     """Get full message history for a session."""
     from backend.state.history import get_session_history, get_session_owner
     
-    # Security Check: Ensure user owns this session
+    # Security Check: Ensure user owns this session (skip in anonymous mode)
+    from backend.config import get_config
     owner = get_session_owner(session_id)
-    if owner and owner != user.user_id:
+    if get_config().use_saml_login and owner and owner != user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this session history")
 
     return {"messages": get_session_history(session_id)}
@@ -263,7 +274,7 @@ async def status():
         """Check if a specific model is available on a given Ollama host."""
         result = {"healthy": False, "error": None}
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{host}/api/tags")
                 if response.status_code == 200:
                     data = response.json()
@@ -366,11 +377,3 @@ def get_documents():
     return {"documents": store.get_all_files()}
 
 
-@router.get("/login")
-def saml_login(request: Request):
-    print("login api callled.....")
-#    auth = _get_saml_auth(request)
-#    return_to = request.query_params.get("next", "/")
-#    redirect_url = auth.login(return_to=return_to)
-#    return RedirectResponse(redirect_url)
-    return {"login": 1 }

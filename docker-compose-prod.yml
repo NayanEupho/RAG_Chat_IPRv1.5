@@ -27,12 +27,12 @@ services:
       - SAML_IDP_CERT_FILE=/app/askme.crt
 
       # Session Security (Direct Sync with backend/saml/settings.py)
-      - SESSION_SECRET=a8a83724580cdd287aac77326e7ecac604b3833ef442d13668d6b3031f20b47b
-      - SESSION_MAX_AGE=28800
+      - SAML_SESSION_SECRET=e9a4c5f8b2d1e3f7a0c9b8e6d5f4c3b2a1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6
+      - SAML_SESSION_MAX_AGE=28800
       - SESSION_COOKIE_NAME=saml_session
+      - SAML_COOKIE_SECURE=true
 
-      - SAML_ENABLED=true
-      - SAML_DEBUG=true
+      - USE_SAML_LOGIN=true
       - ANONYMIZED_TELEMETRY=False
       - INGEST_FORCE_CPU=True
 

@@ -5,6 +5,19 @@ export function middleware(request: NextRequest) {
     console.log("Inside Middleware");
     const session = request.cookies.get('saml_session');
 
+    // If SAML is disabled, just proceed
+    // DEBUG: Log the values to see why it's falling through
+    const publicFlag = process.env.NEXT_PUBLIC_USE_SAML_LOGIN;
+    const serverFlag = process.env.USE_SAML_LOGIN;
+    console.log(`Middleware Debug: NEXT_PUBLIC=${publicFlag}, SERVER=${serverFlag}`);
+
+    const useSaml = (publicFlag === 'true' || serverFlag === 'true');
+
+    if (!useSaml) {
+        console.log("SAML Disabled in Middleware - Proceeding");
+        return NextResponse.next();
+    }
+
     // If no cookie, redirect to SAML login
     if (!session) {
         // We use the backend login route: /saml/login

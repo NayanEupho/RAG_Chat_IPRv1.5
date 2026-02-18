@@ -25,10 +25,12 @@ interface SystemStatus {
 
 export default function Sidebar({
     currentSessionId,
-    onSelectSession
+    onSelectSession,
+    isLoading = false
 }: {
     currentSessionId: string,
-    onSelectSession: (id: string) => void
+    onSelectSession: (id: string) => void,
+    isLoading?: boolean
 }) {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [config, setConfig] = useState<SystemStatus | null>(null);
@@ -41,11 +43,7 @@ export default function Sidebar({
 
     // Dynamic API Base Detection
     const getApiBase = useCallback(() => {
-        if (typeof window !== 'undefined') {
-            const hostname = window.location.hostname;
-            return `https://${hostname}:443/api`;
-        }
-        return 'http://localhost:8000/api';
+        return "/api";
     }, []);
 
     // Fetch sessions
@@ -65,6 +63,9 @@ export default function Sidebar({
 
     // Check System Health (consolidated health & name check)
     const checkHealth = useCallback(async () => {
+        // Skip health check if backend is busy generating (prevent false timeout)
+        if (isLoading) return;
+
         try {
             const res = await fetch(`${getApiBase()}/status`, { credentials: 'include' });
             if (res.ok) {
@@ -84,8 +85,20 @@ export default function Sidebar({
             setEmbedModelHealthy(false);
             setSystemHealth(false);
         }
-    }, [getApiBase]);
+    }, [getApiBase, isLoading]);
     const handleCreateSession = async (title: string) => {
+        const tempId = `temp_${Date.now()}`;
+        const newSession: Session = {
+            session_id: tempId,
+            title: title || 'New Conversation',
+            updated_at: new Date().toISOString()
+        };
+
+        // 1. Optimistic Update: Add to list immediately
+        setSessions(prev => [newSession, ...prev]);
+        setIsNewChatModalOpen(false);
+        onSelectSession(tempId); // Select immediately (UI will show loading if needed)
+
         try {
             const res = await fetch(`${getApiBase()}/sessions`, {
                 method: 'POST',
@@ -94,15 +107,18 @@ export default function Sidebar({
                 credentials: 'include'
             });
             const data = await res.json();
-            if (data && data.session_id) {
-                await fetchSessions(); // Refresh list immediately
-                setIsNewChatModalOpen(false); // Close Modal
 
-                // Use the callback if provided, otherwise update URL
-                onSelectSession(data.session_id);
+            if (data && data.session_id) {
+                // 2. Confirm Update: Replace temp with real ID
+                setSessions(prev => prev.map(s => s.session_id === tempId ? { ...s, session_id: data.session_id } : s));
+                onSelectSession(data.session_id); // Re-select with real ID to load history
+            } else {
+                // Revert on failure
+                setSessions(prev => prev.filter(s => s.session_id !== tempId));
             }
         } catch (err) {
             console.error("Failed to create session", err);
+            setSessions(prev => prev.filter(s => s.session_id !== tempId));
         }
     };
 
@@ -110,16 +126,22 @@ export default function Sidebar({
         e.stopPropagation();
         if (!confirm("Delete this session?")) return;
 
+        // 1. Optimistic Update: Remove immediately
+        const backupSessions = [...sessions];
+        setSessions(prev => prev.filter(s => s.session_id !== id));
+
+        if (currentSessionId === id) {
+            window.history.pushState({}, "", "/");
+            window.dispatchEvent(new Event("session-deleted"));
+        }
+
         try {
             await fetch(`${getApiBase()}/sessions/${id}`, { method: 'DELETE', credentials: 'include' });
-            setSessions(prev => prev.filter(s => s.session_id !== id));
-            if (currentSessionId === id) {
-                // If deleted active session, go to root
-                window.history.pushState({}, "", "/");
-                window.dispatchEvent(new Event("session-deleted")); // Notify ChatInterface
-            }
         } catch (err) {
             console.error("Failed to delete session", err);
+            // Revert on failure
+            setSessions(backupSessions);
+            alert("Failed to delete session. Restoring...");
         }
     }
 
@@ -129,11 +151,14 @@ export default function Sidebar({
         fetchSessions();
         checkHealth();
 
-        // Polling (Every 5s)
+        // Polling (Every 10s to reduce load)
         const interval = setInterval(() => {
-            fetchSessions();
-            checkHealth();
-        }, 5000);
+            // Only poll if window is focused (optional optimization)
+            if (document.visibilityState === 'visible') {
+                fetchSessions();
+                checkHealth();
+            }
+        }, 10000);
 
         return () => clearInterval(interval);
     }, [fetchSessions, checkHealth]);
@@ -184,23 +209,26 @@ export default function Sidebar({
                 {/* Session List */}
                 <div className="sidebar-content custom-scrollbar">
                     <div style={{ padding: '0 8px' }}>
-                        {sessions.map(s => (
-                            <div key={s.session_id} className="session-item-wrapper">
-                                <button
-                                    onClick={() => onSelectSession(s.session_id)}
-                                    className={`session-btn ${currentSessionId === s.session_id ? 'active' : ''}`}
-                                >
-                                    <div className="session-title">{s.title}</div>
-                                    <div className="session-date">{formatDate(s.updated_at)}</div>
-                                </button>
-                                <button
-                                    className="delete-btn"
-                                    onClick={(e) => handleDeleteSession(e, s.session_id)}
-                                >
-                                    <Trash2 size={14} />
-                                </button>
-                            </div>
-                        ))}
+                        {sessions
+                            // Local Sort: Ensure newest is always top (handles optimistic updates correctly)
+                            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+                            .map(s => (
+                                <div key={s.session_id} className="session-item-wrapper">
+                                    <button
+                                        onClick={() => onSelectSession(s.session_id)}
+                                        className={`session-btn ${currentSessionId === s.session_id ? 'active' : ''}`}
+                                    >
+                                        <div className="session-title">{s.title}</div>
+                                        <div className="session-date">{formatDate(s.updated_at)}</div>
+                                    </button>
+                                    <button
+                                        className="delete-btn"
+                                        onClick={(e) => handleDeleteSession(e, s.session_id)}
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            ))}
                     </div>
 
                     {sessions.length === 0 && (

@@ -8,7 +8,9 @@ export default async function Home() {
   const cookieStore = cookies();
   const session = (await cookieStore).get("saml_session");
 
-  if (!session) {
+  const useSaml = process.env.NEXT_PUBLIC_USE_SAML_LOGIN === "true";
+
+  if (useSaml && !session) {
     redirect("/saml/login");
   }
 

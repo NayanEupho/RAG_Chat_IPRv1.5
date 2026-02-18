@@ -115,14 +115,12 @@ def is_session_revoked(session_index: str) -> bool:
 # FastAPI dependencies  –  drop these into any route that needs auth
 # ===========================================================================
 async def get_current_user(request: Request) -> SAMLUser:
-    """
-    Dependency – raises 401 when no valid session exists.
-
-    Usage:
-        @router.get("/dashboard")
-        async def dashboard(user: SAMLUser = Depends(get_current_user)):
-            ...
-    """
+    """Dependency – raises 401 when no valid session exists."""
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+        logger.info(f"Auth Bypass: USE_SAML_LOGIN=false. Returning anonymous user.")
+        return SAMLUser(user_id="anonymous", display_name="Anonymous User")
+        
     user = get_session_from_cookie(request)
     if not user:
         raise HTTPException(
@@ -148,6 +146,9 @@ async def get_optional_user(request: Request) -> Optional[SAMLUser]:
         async def home(user: Optional[SAMLUser] = Depends(get_optional_user)):
             ...
     """
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+        return SAMLUser(user_id="anonymous", display_name="Anonymous User")
     return get_session_from_cookie(request)
 
 
@@ -162,17 +163,22 @@ def create_session_response(user: SAMLUser, redirect_url: str = "/") -> Redirect
     settings = get_saml_settings()
     token    = create_session_token(user)
 
+    # Cookie secure flag: True in production (behind Nginx HTTPS),
+    # can be overridden to False for localhost SAML testing.
+    import os
+    is_secure = os.getenv("SAML_COOKIE_SECURE", "true").lower() == "true"
+
     response = RedirectResponse(url=redirect_url, status_code=303)
     response.set_cookie(
         key=settings.session_cookie_name,
         value=token,
         max_age=settings.session_max_age,
         httponly=True,
-        secure=True,          # HTTPS only – works behind reverse proxies too
+        secure=is_secure,
         samesite="lax",
         path="/",
     )
-    logger.info(f"Session cookie set for {user.user_id} | redirect → {redirect_url}")
+    logger.info(f"Session cookie set for {user.user_id} | secure={is_secure} | redirect → {redirect_url}")
     return response
 
 
@@ -219,64 +225,3 @@ def create_logout_response(redirect_url: str = "/", user: Optional[SAMLUser] = N
     return response
 
 
-# ===========================================================================
-# SAML Initialization Helpers (Moved from routes.py for modularity)
-# ===========================================================================
-from onelogin.saml2.auth import OneLogin_Saml2_Auth # Lazy import to avoid circular dependency if needed
-
-def prepare_flask_request(request: Request) -> dict:
-    """
-    Converts FastAPI request to the dict format expected by python3-saml.
-    Handles the details of extracting host, port, etc. correctly.
-    """
-    url_data = request.url
-    
-    # Trust the X-Forwarded-Proto header from Nginx if present, else fallback
-    forwarded_proto = request.headers.get("X-Forwarded-Proto", url_data.scheme)
-    
-    return {
-        "https": "on" if forwarded_proto == "https" else "off",
-        "http_host": request.headers.get("host", url_data.netloc),
-        "server_port": url_data.port or (443 if forwarded_proto == "https" else 80),
-        "script_name": url_data.path,
-        "get_data": dict(request.query_params),
-        "post_data": {}, # Populated separately for POST requests
-        "query_string": str(request.query_params)
-    }
-
-
-async def init_saml_auth(request: Request, post_data: dict = None) -> OneLogin_Saml2_Auth:
-    """
-    Initialize the SAML Auth object with settings and request data.
-    This is the main entry point for routes to start interacting with SAML.
-    """
-    settings_manager = get_saml_settings() # Renamed to avoid name collision
-    
-    # We use the to_onelogin_settings() method we saw in the plan
-    # But wait - we need to make sure backend/saml/settings.py actually HAS that method.
-    # We will assume it does based on the User's plan, but we should double check settings.py 
-    # If settings.py doesn't have it, we'll need to update it too. 
-    # For now, let's verify settings.py content first to be safe, 
-    # but based on the plan it should replace the logic there.
-    
-    req = prepare_flask_request(request)
-    if post_data:
-        req["post_data"] = post_data
-        
-    # Get the raw config dict for pysaml2
-    # We use the to_onelogin_settings() method which is now verified to exist in settings.py
-    # This returns the correct dict structure for python3-saml.
-    saml_settings = settings_manager.to_onelogin_settings()
-    
-    # WARNING: python3-saml (Onelogin) and pysaml2 are DIFFERENT libraries.
-    # The user's prompt mentioned "onelogin" but the codebase had `saml2` (pysaml2).
-    # The previous `routes.py` I read used `saml2` (pysaml2).
-    # The plan the user gave uses `onelogin.saml2.auth`.
-    # I MUST STICK TO WHAT IS INSTALLED.
-    # Let me check `backend/saml/routes.py` imports again.
-    # It imported `saml2.client`.
-    # The USER's new plan imports `onelogin.saml2`.
-    # This is a library SWITCH.
-    # I need to be careful here. I will assume we are migrating to python3-saml as per the plan.
-    
-    return OneLogin_Saml2_Auth(req, saml_settings)

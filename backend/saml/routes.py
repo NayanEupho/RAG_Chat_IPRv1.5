@@ -2,10 +2,6 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, Response, JSONResponse
 import logging
 import base64
-from lxml import etree
-
-from saml2.client import Saml2Client
-from saml2 import BINDING_HTTP_POST, BINDING_HTTP_REDIRECT
 
 from .settings import get_saml_client
 from .auth import SAMLUser, create_session_response, create_logout_response, verify_session_token
@@ -32,6 +28,7 @@ def parse_saml_xml(xml_string: str) -> dict:
     Parse raw SAML Response XML with lxml.
     Returns  { "name_id": str, "session_index": str, "attributes": {name: [values]} }
     """
+    from lxml import etree  # Lazy import: only needed when SAML is active
     root = etree.fromstring(xml_string.encode("utf-8"))
 
     name_id_el = root.find(".//saml:Assertion/saml:Subject/saml:NameID", SAML_NS)
@@ -90,8 +87,15 @@ def normalise_attributes(name_id: str, attributes: dict) -> dict:
 @router.get("/login")
 async def saml_login(next: str = "/"):
     """Initiates SAML login (SP → IdP)."""
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+        return RedirectResponse(url=next)
+
     try:
-        client: Saml2Client = get_saml_client()
+        from saml2.client import Saml2Client
+        from saml2 import BINDING_HTTP_REDIRECT
+        
+        client = get_saml_client()
         session_id, info = client.prepare_for_authenticate(
             relay_state=next,
             binding=BINDING_HTTP_REDIRECT,
@@ -118,6 +122,10 @@ async def saml_acs(request: Request):
     Assertion Consumer Service – receives the SAML Response from ADFS,
     extracts the user, creates a JWT session cookie, and redirects.
     """
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+         return JSONResponse(status_code=400, content={"detail": "SAML disabled"})
+         
     try:
         # ---------- raw form data ----------
         form                = await request.form()
@@ -141,6 +149,7 @@ async def saml_acs(request: Request):
         attributes = {}
 
         try:
+            from saml2 import BINDING_HTTP_POST
             logger.debug("Attempt 1: pysaml2 full parse (base64 string)")
             authn_response = client.parse_authn_request_response(
                 saml_response_b64,
@@ -162,6 +171,7 @@ async def saml_acs(request: Request):
                 logger.debug("Attempt 2: pysaml2 loads + verify")
                 from saml2.response import AuthnResponse as _AuthnResponse
 
+                from saml2 import BINDING_HTTP_POST
                 resp = _AuthnResponse(
                     client.sec,
                     client.config.attribute_converters,
@@ -238,6 +248,10 @@ async def saml_acs(request: Request):
 @router.get("/metadata")
 async def saml_metadata():
     """Returns SP metadata XML for IdP registration."""
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+        return Response(content="<error>SAML Disabled</error>", media_type="application/xml", status_code=400)
+        
     try:
         client  = get_saml_client()
         acs_url = client.config.getattr("endpoints", "sp")[
@@ -267,7 +281,12 @@ async def saml_metadata():
 async def saml_logout(request: Request, next: str = "/"):
     """
     Local logout: clears session cookie and redirects to IdP SLO.
+    When SAML is disabled, simply redirects without contacting IdP.
     """
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+        return RedirectResponse(url=next)
+
     logger.info(f"SAML logout requested | next={next}")
 
     try:
@@ -299,6 +318,22 @@ async def saml_check(request: Request):
     """
     Check if user is authenticated via SAML session (JWT cookie).
     """
+    from backend.config import get_config
+    if not get_config().use_saml_login:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "authenticated": True,
+                "user": {
+                    "user_id": "anonymous",
+                    "email": "anonymous@local",
+                    "display_name": "Anonymous User",
+                    "session_index": "anonymous",
+                    "attributes": {}
+                }
+            }
+        )
+
     from .settings import get_saml_settings
     settings = get_saml_settings()
     session_cookie = request.cookies.get(settings.session_cookie_name)

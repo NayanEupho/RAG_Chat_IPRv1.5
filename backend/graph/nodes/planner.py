@@ -153,7 +153,7 @@ async def planner_node(state: AgentState):
         # 3. POST-PROCESSING & VALIDATION
         # ---------------------------------------------------------
         
-        intent = plan.get("intent", "rag").lower()
+        intent = (plan.get("intent") or "rag").lower()
         
         # Override Intent if Forced by UI
         if forced_intent:

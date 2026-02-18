@@ -15,20 +15,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(true);
 
     const getApiBase = () => {
-        if (typeof window === 'undefined') return '';
-        return `${window.location.protocol}//${window.location.host}`;
+        return ""; // Relative paths work best for Nginx/Proxy compatibility
     };
 
     const login = () => {
-        window.location.href = `${getApiBase()}/saml/login`;
+        if (process.env.NEXT_PUBLIC_USE_SAML_LOGIN === 'true') {
+            window.location.href = `${getApiBase()}/saml/login`;
+        }
     };
 
     const logout = () => {
-        // Use full page redirect to ensure browser processes the Set-Cookie header correctly.
-        // We redirect to /logged-out to avoid the auto-re-login loop.
-        const logoutUrl = `${getApiBase()}/saml/logout?next=/logged-out`;
-        console.log("Initiating logout using URL:", logoutUrl);
-        window.location.href = logoutUrl;
+        if (process.env.NEXT_PUBLIC_USE_SAML_LOGIN === 'true') {
+            const logoutUrl = `${getApiBase()}/saml/logout?next=/logged-out`;
+            console.log("Initiating logout using URL:", logoutUrl);
+            window.location.href = logoutUrl;
+        } else {
+            // Static logout for anonymous
+            setUser(null);
+            localStorage.removeItem('rag_session_id');
+            window.location.href = '/';
+        }
     };
 
     const checkAuth = useCallback(async () => {

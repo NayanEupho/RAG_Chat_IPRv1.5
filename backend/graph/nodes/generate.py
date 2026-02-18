@@ -76,7 +76,7 @@ async def generate_answer(state: AgentState):
     # 3. BREVITY & STYLE CONTROL
     # Detect if the user wants a detailed explanation
     detail_keywords = ["detail", "comprehensive", "step by step", "elaborate", "full", "detailed", "depth"]
-    latest_query = state.get('query', messages[-1].content).lower()
+    latest_query = (state.get('query') or messages[-1].content).lower()
     is_detailed = any(k in latest_query for k in detail_keywords)
     
     if is_detailed:

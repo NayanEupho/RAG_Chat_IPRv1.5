@@ -26,7 +26,7 @@ export function useChat() {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const getApiBase = useCallback(() => {
-    return '/api';
+    return "/api";
   }, []);
 
   const loadHistory = useCallback(async (sid: string) => {
@@ -104,13 +104,28 @@ export function useChat() {
     const requestStartTime = Date.now();
 
     try {
-      const response = await fetch(`${getApiBase()}/chat/stream`, {
+      // SSE Streaming Strategy:
+      // - Development: Bypass Next.js rewrite proxy (it buffers SSE responses)
+      //   and fetch directly from the backend URL.
+      // - Production: Use relative URL through Nginx reverse proxy, which
+      //   supports SSE natively with proxy_buffering off.
+      const isDev = process.env.NODE_ENV === 'development';
+      const streamUrl = isDev
+        ? `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}/api/chat/stream`
+        : `/api/chat/stream`;
+
+      console.log(`[useChat] Streaming to: ${streamUrl} (isDev=${isDev})`);
+
+      const response = await fetch(streamUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, session_id: sid, mode }),
         signal: controller.signal,
-        credentials: 'include'
       });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
 
       if (!response.body) throw new Error("No response body");
 
@@ -118,6 +133,7 @@ export function useChat() {
       const decoder = new TextDecoder('utf-8');
       let leftover = ''; // Buffer for fragmented lines
       let accumulatedContent = '';
+      let currentEvent: string | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -127,11 +143,11 @@ export function useChat() {
         const lines = (leftover + chunk).split('\n');
         leftover = lines.pop() || ''; // Keep the last partial line
 
-        let currentEvent: string | null = null;
-
         for (const line of lines) {
           const trimmedLine = line.trim();
           if (!trimmedLine) continue;
+
+          console.debug(`[useChat] SSE Line: ${trimmedLine}`);
 
           if (trimmedLine.startsWith('event: ')) {
             currentEvent = trimmedLine.replace('event: ', '');
@@ -262,7 +278,7 @@ export function useChat() {
   }, [messageQueue.length]);
 
   return {
-    messages, sendMessage, loading, currentStatus,
+    messages, setMessages, sendMessage, loading, currentStatus,
     sessionId, setSessionId, loadHistory, stopGeneration,
     fetchDocuments, messageQueue
   };

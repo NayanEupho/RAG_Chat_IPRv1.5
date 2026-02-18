@@ -27,7 +27,7 @@ import ModeSelector, { InteractionMode } from './ModeSelector';
 
 export default function ChatInterface() {
     const {
-        messages, sendMessage, loading, currentStatus,
+        messages, setMessages, sendMessage, loading, currentStatus,
         sessionId, stopGeneration, fetchDocuments,
         setSessionId, loadHistory
     } = useChat();
@@ -94,11 +94,13 @@ export default function ChatInterface() {
     useEffect(() => {
         const handleSessionDeleted = () => {
             localStorage.removeItem('rag_session_id');
-            window.location.href = '/';
+            setSessionId('');
+            setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }]);
+            router.push('/');
         };
         window.addEventListener('session-deleted', handleSessionDeleted);
         return () => window.removeEventListener('session-deleted', handleSessionDeleted);
-    }, []);
+    }, [router, setSessionId, setMessages]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (showMentions) {
@@ -217,11 +219,7 @@ export default function ChatInterface() {
     };
 
     const getApiBase = () => {
-        if (typeof window !== 'undefined') {
-            const hostname = window.location.hostname;
-            return `https://${hostname}:443/api`;
-        }
-        return 'http://localhost:8000/api';
+        return "/api";
     };
 
     const handleOpenFile = (filename: string) => {
@@ -298,6 +296,7 @@ export default function ChatInterface() {
         <div className="app-container">
             <Sidebar
                 currentSessionId={sessionId}
+                isLoading={loading}
                 onSelectSession={(id) => {
                     // Client-side navigation
                     setSessionId(id);
