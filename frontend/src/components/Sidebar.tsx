@@ -6,7 +6,7 @@
  * and displays system health/model configuration status.
  */
 import { Plus, Menu, Trash2, BrainCircuit } from 'lucide-react';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import NewChatModal from './NewChatModal';
 
 interface Session {
@@ -29,7 +29,7 @@ export default function Sidebar({
     isLoading = false
 }: {
     currentSessionId: string,
-    onSelectSession: (id: string) => void,
+    onSelectSession: (id: string, options?: { loadHistory?: boolean }) => void,
     isLoading?: boolean
 }) {
     const [sessions, setSessions] = useState<Session[]>([]);
@@ -40,6 +40,10 @@ export default function Sidebar({
     const [isOpen, setIsOpen] = useState(true);
     const [mounted, setMounted] = useState(false);
     const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
+    const sortedSessions = useMemo(
+        () => [...sessions].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
+        [sessions]
+    );
 
     // Dynamic API Base Detection
     const getApiBase = useCallback(() => {
@@ -97,7 +101,7 @@ export default function Sidebar({
         // 1. Optimistic Update: Add to list immediately
         setSessions(prev => [newSession, ...prev]);
         setIsNewChatModalOpen(false);
-        onSelectSession(tempId); // Select immediately (UI will show loading if needed)
+        onSelectSession(tempId, { loadHistory: false });
 
         try {
             const res = await fetch(`${getApiBase()}/sessions`, {
@@ -111,7 +115,7 @@ export default function Sidebar({
             if (data && data.session_id) {
                 // 2. Confirm Update: Replace temp with real ID
                 setSessions(prev => prev.map(s => s.session_id === tempId ? { ...s, session_id: data.session_id } : s));
-                onSelectSession(data.session_id); // Re-select with real ID to load history
+                onSelectSession(data.session_id, { loadHistory: false });
             } else {
                 // Revert on failure
                 setSessions(prev => prev.filter(s => s.session_id !== tempId));
@@ -209,10 +213,7 @@ export default function Sidebar({
                 {/* Session List */}
                 <div className="sidebar-content custom-scrollbar">
                     <div style={{ padding: '0 8px' }}>
-                        {sessions
-                            // Local Sort: Ensure newest is always top (handles optimistic updates correctly)
-                            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-                            .map(s => (
+                        {sortedSessions.map(s => (
                                 <div key={s.session_id} className="session-item-wrapper">
                                     <button
                                         onClick={() => onSelectSession(s.session_id)}

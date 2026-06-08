@@ -29,10 +29,10 @@ class Reranker:
     def __init__(self):
         if self._initialized:
             return
-        
         from backend.config import get_config
         cfg = get_config()
         self.model_name = cfg.reranker_model
+        self.min_score = cfg.retrieval_min_score
         self.model_path = None
         
         try:
@@ -42,66 +42,47 @@ class Reranker:
         except Exception as e:
             logger.error(f"Failed to init FlashRank: {e}")
             self.ranker = None
-
         self._initialized = True
 
     def _sync_rerank(self, query: str, pass_docs: List[Dict], top_k: int) -> List[Dict[str, Any]]:
-        """
-        Synchronous reranking logic - called from executor to avoid blocking event loop.
-        """
         rerank_request = RerankRequest(query=query, passages=pass_docs)
         results = self.ranker.rerank(rerank_request)
         
-        sorted_docs = []
-        query_words = set(query.lower().split())
-
-        for res in results[:top_k]:
-            # HYBRID BOOST: Add a small boost for exact keyword matches
+        query_words = set(w for w in query.lower().split() if len(w) > 2)
+        query_word_count = len(query_words) if query_words else 1
+        
+        scored = []
+        for res in results:
             text_lower = res["text"].lower()
             keyword_matches = sum(1 for word in query_words if word in text_lower)
-            density_boost = (keyword_matches / len(query_words)) * 0.1 if query_words else 0
+            density_boost = (keyword_matches / query_word_count) * 0.15
+            coverage_ratio = (keyword_matches / max(len(text_lower.split()), 1)) * 5.0
             
-            final_score = res["score"] + density_boost
-
-            sorted_docs.append({
-               "page_content": res["text"],
-               "metadata": res["meta"],
-               "score": final_score
-            })
+            final_score = res["score"] + density_boost + coverage_ratio
+            
+            if final_score >= self.min_score:
+                scored.append({
+                    "page_content": res["text"],
+                    "metadata": res["meta"],
+                    "score": final_score
+                })
         
-        # Re-sort by final hybrid score
-        sorted_docs.sort(key=lambda x: x['score'], reverse=True)
-        return sorted_docs
+        scored.sort(key=lambda x: x['score'], reverse=True)
+        return scored[:top_k]
 
     async def rank(self, query: str, docs: List[Dict[str, Any]], top_k: int = 5) -> List[Dict[str, Any]]:
-        """
-        Async reranker that offloads CPU-bound work to ThreadPoolExecutor.
-        This prevents blocking the event loop during reranking operations.
-        
-        docs expected format: [{'page_content': 'text...', 'metadata': {...}}, ...]
-        """
         if not self.ranker or not docs:
             return docs[:top_k]
-
         try:
-            # FlashRank expects a specific format
             pass_docs = [
                 {"id": str(i), "text": d.get("page_content") or d.get("content", "") or "", "meta": d.get("metadata", {})}
                 for i, d in enumerate(docs)
             ]
-
-            # Offload CPU-bound reranking to ThreadPoolExecutor
             loop = asyncio.get_running_loop()
             sorted_docs = await loop.run_in_executor(
-                None,  # Uses default ThreadPoolExecutor
-                self._sync_rerank,
-                query,
-                pass_docs,
-                top_k
+                None, self._sync_rerank, query, pass_docs, top_k
             )
-            
             return sorted_docs
-            
         except Exception as e:
             logger.error(f"Reranking failed: {e}")
-            return docs[:top_k]  # Fallback to original order
+            return docs[:top_k]

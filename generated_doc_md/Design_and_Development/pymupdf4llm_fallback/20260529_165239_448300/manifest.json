@@ -1,0 +1,10 @@
+{
+  "file_path": "C:\\Users\\Nayan\\Desktop\\RAG_Chat_IPRv1.5\\upload_docs\\General\\Design and Development.pdf",
+  "filename": "Design and Development.pdf",
+  "doc_type": "general",
+  "selected_parser": "pymupdf4llm_fallback",
+  "parser_outputs": [
+    "pymupdf4llm_fallback"
+  ],
+  "normalization": null
+}

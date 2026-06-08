@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional
 import os
 import logging
+from dotenv import load_dotenv
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class AppConfig(BaseModel):
 
     # Hardware Scaling
     ingest_force_cpu: bool = False
+    ingest_llm_normalize: bool = False
 
     # Authentication
     use_saml_login: bool = False
@@ -45,12 +47,37 @@ class AppConfig(BaseModel):
     # RAG Tuning
     reranker_model: str = "ms-marco-TinyBERT-L-2-v2"
     rag_confidence_threshold: float = 0.85
-    retrieval_top_k: int = 7
+    retrieval_top_k: int = 5
+    retrieval_detail_top_k: int = 8
+    retrieval_deep_top_k: int = 10
+    retrieval_candidate_multiplier: int = 7
+    retrieval_min_score: float = 0.05
+    parsing_mode: str = "auto"
 
     # VLM Extraction Options (Optional)
     vlm_host: str = "http://localhost:11434"
     vlm_model: str = "False"
     vlm_prompt: str = "auto"
+    vlm_dpi: int = 220
+    vlm_timeout_seconds: int = 300
+    vlm_concurrency: int = 1
+    vlm_retries: int = 1
+
+    # Model Context Window (for dynamic token budget)
+    # Auto-detected from Ollama model metadata at startup, override via MODEL_CONTEXT_WINDOW env var
+    # Default is conservative (16K) — models like Nemotron-3 support 262K but allocating
+    # the full KV cache on a 120B model is extremely memory-heavy and slows TTFT.
+    model_context_window: int = 16384
+
+    # Thinking model flag: auto-detected from Ollama model metadata at startup.
+    # When True, ChatOllama is created with reasoning=False to skip thinking tokens.
+    is_thinking_model: bool = False
+
+    # Force-disable reasoning for all models (env RAG_NO_THINKING).
+    # When True, ChatOllama is created with reasoning=False regardless of auto-detect.
+    no_thinking: bool = False
+    num_predict: int = 512
+    temperature: float = 0.2
 
     @field_validator("rag_workflow")
     @classmethod
@@ -64,12 +91,19 @@ class AppConfig(BaseModel):
     def is_configured(self) -> bool:
         return self.main_model is not None and self.embedding_model is not None
 
+    @property
+    def docling_force_cpu(self) -> bool:
+        """Backward-compatible alias for older tests/scripts."""
+        return self.ingest_force_cpu
+
 import os
 
 # Singleton instance
 _runtime_config = AppConfig()
 
 def get_config() -> AppConfig:
+    # Load .env file if present (supports uvicorn workers that may not inherit shell env vars)
+    load_dotenv()
     # If not configured in memory, check env vars (in case of uvicorn worker)
     if not _runtime_config.is_configured:
         main_host = os.getenv("RAG_MAIN_HOST")
@@ -91,6 +125,10 @@ def get_config() -> AppConfig:
     force_cpu_env = os.getenv("INGEST_FORCE_CPU")
     if force_cpu_env:
         _runtime_config.ingest_force_cpu = force_cpu_env.lower() == "true"
+
+    llm_normalize_env = os.getenv("INGEST_LLM_NORMALIZE")
+    if llm_normalize_env:
+        _runtime_config.ingest_llm_normalize = llm_normalize_env.lower() == "true"
         
     saml_login_env = os.getenv("USE_SAML_LOGIN")
     if saml_login_env:
@@ -110,12 +148,77 @@ def get_config() -> AppConfig:
         _runtime_config.retrieval_top_k = int(os.getenv("RAG_RETRIEVAL_TOP_K", str(_runtime_config.retrieval_top_k)))
     except ValueError:
         logger.warning("Invalid RAG_RETRIEVAL_TOP_K in env. Using default.")
+
+    try:
+        _runtime_config.retrieval_detail_top_k = int(os.getenv("RAG_RETRIEVAL_DETAIL_TOP_K", str(_runtime_config.retrieval_detail_top_k)))
+    except ValueError:
+        logger.warning("Invalid RAG_RETRIEVAL_DETAIL_TOP_K in env. Using default.")
+
+    try:
+        _runtime_config.retrieval_deep_top_k = int(os.getenv("RAG_RETRIEVAL_DEEP_TOP_K", str(_runtime_config.retrieval_deep_top_k)))
+    except ValueError:
+        logger.warning("Invalid RAG_RETRIEVAL_DEEP_TOP_K in env. Using default.")
+
+    try:
+        _runtime_config.retrieval_candidate_multiplier = int(os.getenv("RAG_CANDIDATE_MULTIPLIER", str(_runtime_config.retrieval_candidate_multiplier)))
+    except ValueError:
+        logger.warning("Invalid RAG_CANDIDATE_MULTIPLIER in env. Using default.")
+
+    try:
+        _runtime_config.retrieval_min_score = float(os.getenv("RAG_RETRIEVAL_MIN_SCORE", str(_runtime_config.retrieval_min_score)))
+    except ValueError:
+        logger.warning("Invalid RAG_RETRIEVAL_MIN_SCORE in env. Using default.")
+
+    parsing_mode = os.getenv("RAG_PARSING_MODE", _runtime_config.parsing_mode).lower()
+    if parsing_mode not in {"auto", "pymupdf", "pymupdf4llm", "docling", "docling_vision", "llm", "vision_llm"}:
+        logger.warning("Invalid RAG_PARSING_MODE in env. Using auto.")
+        parsing_mode = "auto"
+    _runtime_config.parsing_mode = parsing_mode
     
     # VLM Sync
     _runtime_config.vlm_host = os.getenv("RAG_VLM_HOST", _runtime_config.vlm_host)
     _runtime_config.vlm_model = os.getenv("RAG_VLM_MODEL", _runtime_config.vlm_model)
     _runtime_config.vlm_prompt = os.getenv("RAG_VLM_PROMPT", _runtime_config.vlm_prompt)
+    try:
+        _runtime_config.vlm_dpi = int(os.getenv("RAG_VLM_DPI", str(_runtime_config.vlm_dpi)))
+    except ValueError:
+        logger.warning("Invalid RAG_VLM_DPI in env. Using default.")
+    try:
+        _runtime_config.vlm_timeout_seconds = int(os.getenv("RAG_VLM_TIMEOUT_SECONDS", str(_runtime_config.vlm_timeout_seconds)))
+    except ValueError:
+        logger.warning("Invalid RAG_VLM_TIMEOUT_SECONDS in env. Using default.")
+    try:
+        _runtime_config.vlm_concurrency = int(os.getenv("RAG_VLM_CONCURRENCY", str(_runtime_config.vlm_concurrency)))
+    except ValueError:
+        logger.warning("Invalid RAG_VLM_CONCURRENCY in env. Using default.")
+    try:
+        _runtime_config.vlm_retries = int(os.getenv("RAG_VLM_RETRIES", str(_runtime_config.vlm_retries)))
+    except ValueError:
+        logger.warning("Invalid RAG_VLM_RETRIES in env. Using default.")
+
+    # Model context window (env override takes priority)
+    try:
+        _runtime_config.model_context_window = int(os.getenv("MODEL_CONTEXT_WINDOW", str(_runtime_config.model_context_window)))
+    except ValueError:
+        logger.warning("Invalid MODEL_CONTEXT_WINDOW in env. Using default.")
+
+    # No-thinking override (env takes priority over auto-detect)
+    no_think_env = os.getenv("RAG_NO_THINKING")
+    if no_think_env:
+        _runtime_config.no_thinking = no_think_env.lower() == "true"
+        if _runtime_config.no_thinking:
+            logger.info("[CONFIG] RAG_NO_THINKING=true — forcing reasoning=False")
             
+    try:
+        _runtime_config.num_predict = int(os.getenv("RAG_NUM_PREDICT", str(_runtime_config.num_predict)))
+    except ValueError:
+        logger.warning("Invalid RAG_NUM_PREDICT in env. Using default.")
+
+    try:
+        _runtime_config.temperature = float(os.getenv("RAG_TEMPERATURE", str(_runtime_config.temperature)))
+    except ValueError:
+        logger.warning("Invalid RAG_TEMPERATURE in env. Using default.")
+
     return _runtime_config
 
 def set_main_model(host: str, model: str):

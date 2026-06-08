@@ -1,0 +1,18 @@
+{
+  "file_path": "C:\\Users\\Nayan\\Desktop\\RAG_Chat_IPRv1.5\\upload_docs\\General\\ADG-1.pdf",
+  "filename": "ADG-1.pdf",
+  "doc_type": "general",
+  "selected_parser": "vision_llm",
+  "parser_outputs": [
+    "vision_llm",
+    "vision_page_001",
+    "vision_page_002",
+    "vision_page_003",
+    "vision_page_004",
+    "vision_page_005",
+    "vision_page_006",
+    "vision_page_007",
+    "vision_page_008"
+  ],
+  "normalization": null
+}

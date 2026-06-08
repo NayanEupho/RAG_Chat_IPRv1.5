@@ -53,7 +53,7 @@ async def test_planner_llm_flow():
         mock_get_client.return_value = mock_client
         
         from backend.graph.nodes.planner import planner_node
-        state = {"messages": [MagicMock(content="Find policies about PTO")], "mode": "auto"}
+        state = {"messages": [MagicMock(content="PTO allocation")], "mode": "auto"}
         
         result = await planner_node(state)
         

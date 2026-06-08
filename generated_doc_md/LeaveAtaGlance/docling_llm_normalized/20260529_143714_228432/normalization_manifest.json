@@ -1,0 +1,49 @@
+{
+  "enabled": true,
+  "mode": "llm_markdown",
+  "status": "accepted",
+  "source_parser": "docling",
+  "doc_type": "general",
+  "model": "qwen3.6:35b-a3b-q8_0",
+  "host": "http://10.20.39.12:11438",
+  "raw_char_count": 25569,
+  "normalized_char_count": 8888,
+  "raw_word_count": 1544,
+  "normalized_word_count": 1542,
+  "batch_count": 1,
+  "validation": {
+    "raw_word_count": 1544,
+    "normalized_word_count": 1542,
+    "word_retention_ratio": 0.999,
+    "errors": [],
+    "warnings": []
+  },
+  "batches": [
+    {
+      "batch_id": 1,
+      "input_chars": 25569,
+      "output_chars": 8888,
+      "headings": [
+        "# IPR Leave Rules at a Glance",
+        "## General Provisions",
+        "## Medical Leave Rules",
+        "### Grant of Leave on Medical Grounds",
+        "## Leave Status and Absence",
+        "## Types of Leave",
+        "### Earned Leave (EL)",
+        "### Half Pay Leave (HPL)",
+        "### Commuted Leave",
+        "### Casual Leave (CL)",
+        "### Restricted Holiday (RH)",
+        "### Extra Ordinary Leave (EOL)",
+        "### Leave Not Due (LND)",
+        "### Maternity Leave",
+        "### Child Care Leave (CCL)",
+        "### Child Adoption Leave for Female Employee",
+        "### Paternity Leave",
+        "### Study Leave"
+      ],
+      "warnings": []
+    }
+  ]
+}

@@ -9,6 +9,11 @@ from typing import List, Dict, Any, Annotated, TypedDict, Optional
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
+def update_summary(current: str, new: str) -> str:
+    if new:
+        return new
+    return current
+
 class AgentState(TypedDict):
     """
     Standard schema for the multi-agent graph state.
@@ -22,6 +27,9 @@ class AgentState(TypedDict):
         semantic_queries: Planned search operations (query + target).
         mode: Operation mode (auto, rag, chat).
         query_embedding: Cached vector representation of the query.
+        summary: Running conversation summary for context preservation.
+        retrieval_metrics: Diagnostics for the latest retrieval pass.
+        context_action: How to handle previous retrieval context.
     """
     messages: Annotated[List[BaseMessage], add_messages]
     query: str
@@ -31,3 +39,6 @@ class AgentState(TypedDict):
     semantic_queries: List[Dict[str, Any]]
     mode: str
     query_embedding: Optional[List[float]]
+    summary: Annotated[str, update_summary]
+    retrieval_metrics: Dict[str, Any]
+    context_action: str

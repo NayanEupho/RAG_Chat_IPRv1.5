@@ -20,28 +20,26 @@ interface ThinkingProcessProps {
     thoughts: ThoughtItem[];
     isFinished?: boolean;
     ttft?: number;
+    hasStartedAnswer?: boolean;
 }
 
-export default function ThinkingProcess({ thoughts, isFinished = false, ttft }: ThinkingProcessProps) {
+export default function ThinkingProcess({ thoughts, isFinished = false, ttft, hasStartedAnswer = false }: ThinkingProcessProps) {
     const [isExpanded, setIsExpanded] = useState(!isFinished);
     const [elapsed, setElapsed] = useState(0);
 
     useEffect(() => {
-        if (isFinished) {
-            // Collapse by default when finished histories are loaded
-            // But if it just finished streaming, we might want to let user see it for a bit
-            const t = setTimeout(() => setIsExpanded(false), 800);
-            return () => clearTimeout(t);
+        if (isFinished || hasStartedAnswer) {
+            setIsExpanded(false);
         } else {
             setIsExpanded(true);
         }
-    }, [isFinished]);
+    }, [isFinished, hasStartedAnswer]);
 
     useEffect(() => {
-        if (isFinished) return;
+        if (isFinished || hasStartedAnswer) return;
         const interval = setInterval(() => setElapsed(s => s + 1), 1000);
         return () => clearInterval(interval);
-    }, [isFinished]);
+    }, [isFinished, hasStartedAnswer]);
 
     if (thoughts.length === 0) return null;
 
@@ -65,18 +63,18 @@ export default function ThinkingProcess({ thoughts, isFinished = false, ttft }: 
                     {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </div>
 
-                <div className={`${styles.icon} ${!isFinished ? styles.iconThinking : ""}`}>
+                <div className={`${styles.icon} ${!isFinished && !hasStartedAnswer ? styles.iconThinking : ""}`}>
                     <BrainCircuit size={16} />
                 </div>
 
                 <span className={styles.label}>
-                    {isFinished ? "Thought Process" : "Thinking..."}
+                    {isFinished || hasStartedAnswer ? "Thought Process" : "Thinking..."}
                 </span>
 
                 <div className={styles.meta}>
                     <span>{thoughts.length} steps</span>
-                    {!isFinished && <span>{elapsed}s</span>}
-                    {isFinished && ttft && <span>TTFT: {(ttft / 1000).toFixed(2)}s</span>}
+                    {!isFinished && !hasStartedAnswer && <span>{elapsed}s</span>}
+                    {(isFinished || hasStartedAnswer) && ttft && <span>TTFT: {(ttft / 1000).toFixed(2)}s</span>}
                 </div>
             </button>
 
@@ -100,7 +98,7 @@ export default function ThinkingProcess({ thoughts, isFinished = false, ttft }: 
                             </div>
                         ))}
 
-                        {!isFinished && (
+                        {!isFinished && !hasStartedAnswer && (
                             <div className={styles.thinkingRow}>
                                 <div className={styles.thinkingDot} />
                                 Processing next step...

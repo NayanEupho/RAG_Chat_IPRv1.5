@@ -24,15 +24,50 @@ export function useChat() {
   // Session Persistence
   const [sessionId, setSessionId] = useState<string>('');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const historyRequestRef = useRef(0);
 
   const getApiBase = useCallback(() => {
     return "/api";
   }, []);
 
+  const getStreamingBackendBase = useCallback(() => {
+    const configured = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+
+    if (typeof window === 'undefined') {
+      return configured;
+    }
+
+    try {
+      const backendUrl = new URL(configured);
+      const pageHost = window.location.hostname;
+      const backendHost = backendUrl.hostname;
+      const pageIsLoopback = ['localhost', '127.0.0.1', '::1'].includes(pageHost);
+      const backendIsLoopback = ['localhost', '127.0.0.1', '::1'].includes(backendHost);
+
+      if (backendIsLoopback && !pageIsLoopback) {
+        backendUrl.hostname = pageHost;
+        return backendUrl.toString().replace(/\/$/, '');
+      }
+
+      return configured.replace(/\/$/, '');
+    } catch {
+      return configured.replace(/\/$/, '');
+    }
+  }, []);
+
   const loadHistory = useCallback(async (sid: string) => {
+    const requestId = ++historyRequestRef.current;
+
+    if (!sid) {
+      setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }]);
+      return;
+    }
+
     try {
       const res = await fetch(`${getApiBase()}/history/${sid}`, { credentials: 'include' });
       const data = await res.json();
+      if (requestId !== historyRequestRef.current) return;
+
       if (data.messages && data.messages.length > 0) {
         const mapped: Interaction[] = data.messages.map((m: {
           role: 'user' | 'bot';
@@ -55,6 +90,7 @@ export function useChat() {
         setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Chat history is empty.' }]);
       }
     } catch {
+      if (requestId !== historyRequestRef.current) return;
       console.error("Failed to load history");
     }
   }, [getApiBase]);
@@ -111,7 +147,7 @@ export function useChat() {
       //   supports SSE natively with proxy_buffering off.
       const isDev = process.env.NODE_ENV === 'development';
       const streamUrl = isDev
-        ? `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}/api/chat/stream`
+        ? `${getStreamingBackendBase()}/api/chat/stream`
         : `/api/chat/stream`;
 
       console.log(`[useChat] Streaming to: ${streamUrl} (isDev=${isDev})`);
@@ -134,6 +170,41 @@ export function useChat() {
       let leftover = ''; // Buffer for fragmented lines
       let accumulatedContent = '';
       let currentEvent: string | null = null;
+      let firstTokenAt: number | undefined;
+      let animationFrame: number | null = null;
+      let tokenFlushTimer: number | null = null;
+      let lastTokenFlushAt = 0;
+
+      const flushTokenContent = () => {
+        animationFrame = null;
+        tokenFlushTimer = null;
+        lastTokenFlushAt = performance.now();
+        setMessages(prev => {
+          const next = [...prev];
+          for (let i = next.length - 1; i >= 0; i--) {
+            if (next[i].role === 'bot') {
+              const nextBot = { ...next[i], content: accumulatedContent };
+              if (nextBot.ttft === undefined && firstTokenAt !== undefined) {
+                nextBot.ttft = firstTokenAt - requestStartTime;
+              }
+              next[i] = nextBot;
+              break;
+            }
+          }
+          return next;
+        });
+      };
+
+      const scheduleTokenFlush = () => {
+        if (animationFrame !== null || tokenFlushTimer !== null) return;
+        const elapsedSinceFlush = performance.now() - lastTokenFlushAt;
+        const delay = Math.max(0, 50 - elapsedSinceFlush);
+        tokenFlushTimer = window.setTimeout(() => {
+          tokenFlushTimer = null;
+          if (animationFrame !== null) return;
+          animationFrame = window.requestAnimationFrame(flushTokenContent);
+        }, delay);
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -146,8 +217,6 @@ export function useChat() {
         for (const line of lines) {
           const trimmedLine = line.trim();
           if (!trimmedLine) continue;
-
-          console.debug(`[useChat] SSE Line: ${trimmedLine}`);
 
           if (trimmedLine.startsWith('event: ')) {
             currentEvent = trimmedLine.replace('event: ', '');
@@ -186,23 +255,20 @@ export function useChat() {
               try {
                 const token = JSON.parse(eventData);
                 accumulatedContent += token;
-                setMessages(prev => {
-                  const next = [...prev];
-                  for (let i = next.length - 1; i >= 0; i--) {
-                    if (next[i].role === 'bot') {
-                      const nextBot = { ...next[i], content: accumulatedContent };
-                      if (nextBot.ttft === undefined) {
-                        nextBot.ttft = Date.now() - requestStartTime;
-                      }
-                      next[i] = nextBot;
-                      break;
-                    }
-                  }
-                  return next;
-                });
+                if (firstTokenAt === undefined) firstTokenAt = Date.now();
+                scheduleTokenFlush();
               } catch { }
             } else if (currentEvent === 'end') {
               try {
+                if (animationFrame !== null) {
+                  window.cancelAnimationFrame(animationFrame);
+                  animationFrame = null;
+                }
+                if (tokenFlushTimer !== null) {
+                  window.clearTimeout(tokenFlushTimer);
+                  tokenFlushTimer = null;
+                }
+                flushTokenContent();
                 const metadata = JSON.parse(eventData);
                 setMessages(prev => {
                   const next = [...prev];
@@ -250,7 +316,7 @@ export function useChat() {
       setCurrentStatus('');
       abortControllerRef.current = null;
     }
-  }, [getApiBase]);
+  }, [getStreamingBackendBase]);
 
   const processQueue = useCallback(async () => {
     if (isProcessing.current || messageQueue.length === 0) return;

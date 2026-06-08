@@ -10,6 +10,13 @@ import sys
 import os
 from dotenv import load_dotenv
 
+if sys.version_info >= (3, 14):
+    raise RuntimeError(
+        "This project must run on Python 3.13.x. Python 3.14 breaks ChromaDB's "
+        "Pydantic v1 configuration import. Start it with `uv run python main.py` "
+        "or activate the project .venv before running main.py."
+    )
+
 # Load environment variables globally
 load_dotenv()
 
@@ -49,6 +56,8 @@ def main():
     os.environ["RAG_EMBED_MODEL"] = config.embedding_model.model_name
     os.environ["RAG_WORKFLOW"] = config.rag_workflow
     os.environ["INGEST_FORCE_CPU"] = str(config.ingest_force_cpu).lower()
+    os.environ["INGEST_LLM_NORMALIZE"] = str(config.ingest_llm_normalize).lower()
+    os.environ["RAG_PARSING_MODE"] = config.parsing_mode
     os.environ["USE_SAML_LOGIN"] = str(config.use_saml_login).lower()
     
     # We run uvicorn programmatically

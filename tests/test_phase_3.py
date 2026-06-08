@@ -22,7 +22,7 @@ async def test_router_regex():
     
     result = await route_query(state)
     assert result['intent'] == "specific_doc_rag"
-    assert result['specific_file'] == "report.pdf"
+    assert result['targeted_docs'] == ["report.pdf"]
     assert "summary" in result['query']
 
 @pytest.mark.asyncio
@@ -32,9 +32,8 @@ async def test_router_heuristic():
         "messages": [HumanMessage(content="What is the capital of France?")], 
         "query": "", "intent": ""
     }
-    # Current heuristic defaults to direct_rag for simplicity in code
     result = await route_query(state)
-    assert result['intent'] == "direct_rag"
+    assert result['intent'] == "chat"
 
 if __name__ == "__main__":
     # Simple async runner

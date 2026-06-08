@@ -8,12 +8,18 @@ Includes intelligent client caching per event loop and LangChain integration.
 import ollama
 import asyncio
 import weakref
+import logging
 from langchain_ollama import ChatOllama
 from backend.config import get_config
 from typing import Dict
 
+logger = logging.getLogger(__name__)
+
 # Cache for AsyncClient instances to prevent connection leakage across loops
 _loop_client_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+# Singleton cache for ChatOllama instances (keyed by model name)
+_chat_model_cache: Dict[str, ChatOllama] = {}
 
 class OllamaClientWrapper:
     """
@@ -30,18 +36,16 @@ class OllamaClientWrapper:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop - create a new client (useful for ingestion worker thread)
             return ollama.AsyncClient(host=host)
-        
-        # Get or create the host->client mapping for this loop
+
         if loop not in _loop_client_cache:
             _loop_client_cache[loop] = {}
-        
+
         loop_clients = _loop_client_cache[loop]
-        
+
         if host not in loop_clients:
             loop_clients[host] = ollama.AsyncClient(host=host)
-        
+
         return loop_clients[host]
 
     @classmethod
@@ -65,14 +69,34 @@ class OllamaClientWrapper:
 
     @classmethod
     def get_chat_model(cls) -> ChatOllama:
-        config = get_config()
-        if not config.main_model:
+        cfg = get_config()
+        if not cfg.main_model:
             raise ValueError("Main Model not configured")
-        return ChatOllama(
-            base_url=config.main_model.host,
-            model=config.main_model.model_name,
-            streaming=True
+        disable_thinking = cfg.no_thinking or cfg.is_thinking_model
+        model_key = (
+            f"{cfg.main_model.host}:{cfg.main_model.model_name}:"
+            f"think={not disable_thinking}:ctx={cfg.model_context_window}:"
+            f"predict={cfg.num_predict}:temp={cfg.temperature}"
         )
+        if model_key not in _chat_model_cache:
+            kwargs = dict(
+                base_url=cfg.main_model.host,
+                model=cfg.main_model.model_name,
+                streaming=True,
+                num_ctx=cfg.model_context_window,
+                num_predict=cfg.num_predict,
+                temperature=cfg.temperature,
+                keep_alive=-1,
+            )
+            if cfg.no_thinking:
+                logger.info(f"[CLIENT] RAG_NO_THINKING=True - sending Ollama think=false for {cfg.main_model.model_name}")
+            elif cfg.is_thinking_model:
+                logger.info(f"[CLIENT] Auto-detected thinking model: {cfg.main_model.model_name} - sending Ollama think=false")
+            if disable_thinking:
+                # ChatOllama maps `reasoning=False` to the Ollama API field `think: false`.
+                kwargs["reasoning"] = False
+            _chat_model_cache[model_key] = ChatOllama(**kwargs)
+        return _chat_model_cache[model_key]
 
     @staticmethod
     def get_embedding_model_name() -> str:

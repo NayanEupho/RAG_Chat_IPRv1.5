@@ -12,8 +12,10 @@ CHAT_KEYWORDS = [
 
 # Keywords suggesting document search (Intent: rag)
 RAG_KEYWORDS = [
-    "document", "file", "report", "policy", "according to", "what is",
-    "what does", "summarize", "about", "describe", "find", "search",
+    "document", "file", "report", "policy", "rules", "according to",
+    "what does", "summarize", "find", "search",
     "look up", "check", "verify", "based on", "compliance", "regulation",
-    "guideline", "procedure", "in the", "from the"
+    "guideline", "procedure", "in the", "from the", "compare", "eligibility",
+    "eligible", "criteria", "benefits", "limitations", "methodology",
+    "conclusions", "future work"
 ]

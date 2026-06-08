@@ -1,0 +1,13 @@
+{
+  "parser": "pymupdf4llm_fallback",
+  "source_type": "pymupdf4llm_fallback",
+  "fallback_reason": null,
+  "page_count": 0,
+  "char_count": 10126,
+  "word_count": 1662,
+  "table_count": 0,
+  "table_row_count": 0,
+  "broken_table_score": 0.0,
+  "empty": false,
+  "warnings": []
+}

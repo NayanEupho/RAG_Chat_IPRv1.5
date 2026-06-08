@@ -33,6 +33,8 @@ def build_graph():
         def planner_route(state):
             if state['intent'] == 'chat':
                 return "generator"
+            if state.get("context_action") == "answer_from_existing":
+                return "generator"
             else:
                 return "retriever"
         

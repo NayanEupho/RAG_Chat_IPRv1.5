@@ -1,0 +1,14 @@
+{
+  "file_path": "C:\\Users\\Nayan\\Desktop\\RAG_Chat_IPRv1.5\\upload_docs\\General\\Design and Development.pdf",
+  "filename": "Design and Development.pdf",
+  "doc_type": "general",
+  "selected_parser": "vision_llm",
+  "parser_outputs": [
+    "vision_llm",
+    "vision_page_001",
+    "vision_page_002",
+    "vision_page_003",
+    "vision_page_004"
+  ],
+  "normalization": null
+}

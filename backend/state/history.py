@@ -67,6 +67,9 @@ def init_history_db():
         if 'user_id' not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT 'legacy_user'")
             logger.info("Migrated sessions table: added user_id column")
+        if 'summary' not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT ''")
+            logger.info("Migrated sessions table: added summary column")
 
         # Now safe to create indices
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")

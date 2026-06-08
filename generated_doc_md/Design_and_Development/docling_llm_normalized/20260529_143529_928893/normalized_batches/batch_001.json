@@ -1,0 +1,18 @@
+{
+  "batch_id": 1,
+  "input_chars": 7533,
+  "output_chars": 7994,
+  "headings": [
+    "# Design and Development of \"Institute for Plasma Research\" Website",
+    "## Table of Contents",
+    "## 1. Scope of the Work",
+    "### 1.1. Web Application",
+    "### 1.2. UI/UX Design",
+    "### 1.3. Security",
+    "### 1.4. Certificates and Audit",
+    "### 1.5. Requirement for Work Execution",
+    "## 2. Warranty Requirement",
+    "## 3. Acceptance and Deliverables"
+  ],
+  "warnings": []
+}

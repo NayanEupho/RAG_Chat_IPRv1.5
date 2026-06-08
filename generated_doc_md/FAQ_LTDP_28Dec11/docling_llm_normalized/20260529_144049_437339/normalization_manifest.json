@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "mode": "llm_markdown",
+  "status": "accepted",
+  "source_parser": "docling",
+  "doc_type": "qna",
+  "model": "qwen3.6:35b-a3b-q8_0",
+  "host": "http://10.20.39.12:11438",
+  "raw_char_count": 10106,
+  "normalized_char_count": 10061,
+  "raw_word_count": 1653,
+  "normalized_word_count": 1634,
+  "batch_count": 1,
+  "validation": {
+    "raw_word_count": 1653,
+    "normalized_word_count": 1634,
+    "word_retention_ratio": 0.989,
+    "errors": [],
+    "warnings": []
+  },
+  "batches": [
+    {
+      "batch_id": 1,
+      "input_chars": 10106,
+      "output_chars": 10061,
+      "headings": [],
+      "warnings": [
+        "no_headings"
+      ]
+    }
+  ]
+}

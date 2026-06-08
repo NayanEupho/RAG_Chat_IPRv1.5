@@ -1,0 +1,69 @@
+{
+  "file_path": "upload_docs\\General\\Final Contract-1.pdf",
+  "filename": "Final Contract-1.pdf",
+  "doc_type": "general",
+  "selected_parser": "docling_llm_normalized",
+  "parser_outputs": [
+    "docling",
+    "llm_normalized"
+  ],
+  "normalization": {
+    "enabled": true,
+    "mode": "llm_markdown",
+    "status": "accepted",
+    "source_parser": "docling",
+    "doc_type": "general",
+    "model": "qwen3.6:35b-a3b-q8_0",
+    "host": "http://10.20.39.12:11438",
+    "raw_char_count": 15133,
+    "normalized_char_count": 11053,
+    "raw_word_count": 1964,
+    "normalized_word_count": 1556,
+    "batch_count": 1,
+    "validation": {
+      "raw_word_count": 1964,
+      "normalized_word_count": 1556,
+      "word_retention_ratio": 0.792,
+      "errors": [],
+      "warnings": []
+    },
+    "batches": [
+      {
+        "batch_id": 1,
+        "input_chars": 15133,
+        "output_chars": 11053,
+        "headings": [
+          "# Contract Document: Institute for Plasma Research",
+          "## Organisation Details",
+          "## Financial Approval Detail",
+          "## Consignee Details",
+          "## Service Provider Details",
+          "## Service Details",
+          "## Contract",
+          "## Buyer Details",
+          "## Paying Authority Details",
+          "## Financial Summary",
+          "## SLA Details",
+          "### PREAMBLE:",
+          "### Service Formula:",
+          "## Techno-Commercial Clarification",
+          "### Additional Required Data/Document(s): Buyer",
+          "### Additional Data/Document(s): Seller",
+          "## e PBG Detail",
+          "## Terms and Conditions",
+          "### 1. General Terms and Conditions",
+          "### 2. Buyer Added Bid Specific Terms and Conditions",
+          "#### 2.1 Generic:",
+          "#### 2.2 Certificates:",
+          "#### 2.3 Generic:",
+          "#### 2.4 Purchase Preference (Centre):",
+          "#### 2.5 Service & Support:",
+          "#### 2.6 Buyer Added Bid Specific ATC:",
+          "## Eligibility Criteria:",
+          "## Note:"
+        ],
+        "warnings": []
+      }
+    ]
+  }
+}

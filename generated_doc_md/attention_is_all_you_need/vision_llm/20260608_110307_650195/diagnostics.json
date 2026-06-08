@@ -1,0 +1,13 @@
+{
+  "parser": "vision_llm",
+  "source_type": "vision_llm",
+  "fallback_reason": null,
+  "page_count": 0,
+  "char_count": 45873,
+  "word_count": 7139,
+  "table_count": 4,
+  "table_row_count": 55,
+  "broken_table_score": 0.073,
+  "empty": false,
+  "warnings": []
+}

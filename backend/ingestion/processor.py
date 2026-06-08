@@ -27,12 +27,24 @@ import logging
 import os
 import re
 import html
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import torch
 import multiprocessing
 import math
 from functools import lru_cache
 from backend.config import get_config
+from backend.ingestion.artifacts import save_parse_artifacts
+from backend.ingestion.chunkers.general import GeneralChunker, extract_markdown_tables
+from backend.ingestion.chunkers.normalized import NormalizedMarkdownChunker
+from backend.ingestion.chunkers.qna import QnAChunker
+from backend.ingestion.chunkers.vision import VisionChunker
+from backend.ingestion.models import ParsedDocument
+from backend.ingestion.normalizers import LlmMarkdownNormalizer, NormalizationOptions
+from backend.ingestion.parsers import normalize_parser_mode, parse_to_markdown
+from backend.ingestion.quality.gates import analyze_markdown, should_fallback
+from backend.ingestion.vision_parser import VisionMarkdownParser
+from backend.ingestion.vision_prompts import prompt_for_doc_type
 
 # --- Probabilistic Viterbi Segmenter (Zero-Dependency) ---
 class ViterbiSegmenter:
@@ -107,6 +119,28 @@ class ViterbiSegmenter:
 viterbi = ViterbiSegmenter()
 
 logger = logging.getLogger("rag_chat_ipr.processor")
+
+
+@dataclass
+class SectionBlock:
+    """A normalized document section ready for chunking."""
+    path: str
+    level: int
+    title: str
+    text: str
+    start_line: int
+    end_line: int
+
+
+def _stable_doc_id(file_path: str) -> str:
+    """Stable source identifier that prevents same-name collisions across folders."""
+    abs_path = os.path.abspath(file_path)
+    try:
+        normalized = os.path.relpath(abs_path, os.getcwd())
+    except ValueError:
+        normalized = abs_path
+    normalized = os.path.normpath(normalized).replace("\\", "/").lower()
+    return re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
 
 class DocumentProcessor:
     """
@@ -245,18 +279,32 @@ class DocumentProcessor:
             }
         )
 
-    def process_file(self, file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200, mode: str = "auto") -> List[Dict]:
+    def process_file(
+        self,
+        file_path: str,
+        chunk_size: int = 2200,
+        chunk_overlap: int = 0,
+        mode: str = "auto",
+        llm_normalize: bool = False,
+    ) -> List[Dict]:
         """
         Ingests a file, converts it to Markdown, cleans it, and splits it into chunks.
-        Mode: 'auto' (Hybrid), 'pymupdf4llm' (Force PyMuPDF), 'docling_vision' (Force OCR)
+        Mode: 'auto' (Hybrid), 'pymupdf4llm' (Force PyMuPDF),
+        'docling_vision' (Force OCR), 'vision_llm' (Ollama multimodal)
         """
         filename = os.path.basename(file_path)
         ext = os.path.splitext(filename)[1].lower()
+        normalized_path = file_path.replace('\\', '/')
+        doc_type = "qna" if "/qna/" in normalized_path.lower() else "general"
+        cfg_mode = get_config().parsing_mode
+        if mode == "auto" and cfg_mode != "auto":
+            mode = "auto" if cfg_mode == "llm" else cfg_mode
+        mode = normalize_parser_mode(mode)
         
         logger.info(f"Processing {filename} [Mode: {mode.upper()}]...")
         
         # Extension Whitelist (Docling + Fallbacks)
-        if ext not in [".pdf", ".md", ".txt", ".docx", ".pptx", ".xlsx", ".html"]:
+        if ext not in [".pdf", ".md", ".markdown", ".txt", ".docx", ".pptx", ".xlsx", ".html"]:
             logger.debug(f"Skipping unsupported file format: {ext}")
             return []
 
@@ -265,11 +313,63 @@ class DocumentProcessor:
             source_type = "docling" # Default
             md_content = ""
             
-            if ext == ".txt":
+            parser_outputs = {}
+
+            if ext in {".md", ".markdown"}:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     md_content = f.read()
-                source_type = "fastpath"
-            
+                source_type = "markdown"
+
+            elif ext == ".txt":
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    md_content = f.read()
+                source_type = "text"
+             
+            elif ext == ".pdf" and mode == "docling":
+                converter = self._get_converter(enable_ocr=False)
+                result = converter.convert(file_path)
+                md_content = result.document.export_to_markdown()
+                source_type = "docling"
+
+            elif ext == ".pdf" and mode == "pymupdf4llm":
+                import pymupdf4llm
+                md_content = pymupdf4llm.to_markdown(file_path)
+                source_type = "pymupdf4llm"
+
+            elif ext == ".pdf" and mode == "pymupdf":
+                parsed = parse_to_markdown(
+                    file_path=file_path,
+                    mode="pymupdf",
+                    doc_type=doc_type,
+                    converter_factory=self._get_converter,
+                    scanned_detector=self._is_scanned_pdf,
+                    clean_markdown=self._clean_markdown_artifacts,
+                    fix_header_hierarchy=self._fix_header_hierarchy,
+                )
+                md_content = parsed.markdown
+                source_type = parsed.selected_parser
+                parser_outputs.update(parsed.parser_outputs)
+
+            elif ext == ".pdf" and mode == "vision_llm":
+                cfg = get_config()
+                logger.info(f"[VISION_LLM] Parsing {filename} page-by-page with {cfg.vlm_model} at {cfg.vlm_host}")
+                vision_prompt = prompt_for_doc_type(doc_type, cfg.vlm_prompt)
+                parser = VisionMarkdownParser(
+                    host=cfg.vlm_host,
+                    model=cfg.vlm_model,
+                    prompt=vision_prompt,
+                    dpi=cfg.vlm_dpi,
+                    timeout_seconds=cfg.vlm_timeout_seconds,
+                    concurrency=cfg.vlm_concurrency,
+                    retries=cfg.vlm_retries,
+                )
+                title = os.path.splitext(filename)[0]
+                md_content, vision_pages = parser.parse_pdf(file_path, title=title)
+                source_type = "vision_llm"
+                parser_outputs["vision_llm"] = md_content
+                for page in vision_pages:
+                    parser_outputs[f"vision_page_{page.page_number:03d}"] = page.markdown
+             
             elif ext == ".pdf":
                 # Smart OCR detection or mode override
                 needs_ocr = self._is_scanned_pdf(file_path) if mode == "auto" else (mode == "docling_vision")
@@ -280,10 +380,22 @@ class DocumentProcessor:
                     result = converter.convert(file_path)
                     doc = result.document
                     md_content = doc.export_to_markdown()
+                    docling_diagnostics = analyze_markdown(md_content, parser="docling", source_type="docling")
                     
                     # --- [Quality Gate] ---
-                    # Check for artifacts (Mushing, Encoding errors, Missing headers)
-                    quality_issues = self._should_retry_with_vision(md_content) # Reusing this detector
+                    # For table-heavy digital PDFs, Docling may emit many isolated
+                    # row-number tokens. That is not corruption if table structure
+                    # is coherent, so prefer Docling over PyMuPDF in that case.
+                    heuristic_issues = self._should_retry_with_vision(md_content)
+                    table_structure_good = (
+                        docling_diagnostics.table_count > 0
+                        and docling_diagnostics.table_row_count >= 3
+                        and docling_diagnostics.broken_table_score < 0.25
+                    )
+                    quality_issues = (
+                        should_fallback(docling_diagnostics, doc_type="general")
+                        or (heuristic_issues and not table_structure_good)
+                    )
                     
                     if not needs_ocr and quality_issues:
                         logger.warning(f"[QUALITY] Detected potential text issues in Docling output for {filename}.")
@@ -336,11 +448,16 @@ class DocumentProcessor:
                 doc = result.document
                 md_content = doc.export_to_markdown()
 
+            if source_type in {"markdown", "text", "docling", "docling_vision", "pymupdf4llm"}:
+                md_content = self._clean_markdown_artifacts(md_content)
+                md_content = self._fix_header_hierarchy(md_content)
+
             if not md_content.strip():
                 raise ValueError("Extracted content is empty.")
-                
+            parser_outputs.setdefault(source_type, md_content)
+                 
         except Exception as e:
-            logger.warning(f"Primary pipeline failed for {file_path}: {e}")
+            logger.warning(f"Primary pipeline failed for {file_path}: {e!r}")
             logger.info("Retrying with PyMuPDF4LLM fallback...")
             source_type = "pymupdf4llm_fallback"
             try:
@@ -350,243 +467,428 @@ class DocumentProcessor:
                 if not md_content.strip():
                     logger.warning("PyMuPDF4LLM extracted empty content.")
                     return []
-                    
+                 
                 logger.info("Successfully extracted text via PyMuPDF4LLM.")
+                parser_outputs = {source_type: md_content}
             except Exception as ep:
                 logger.error(f"PyMuPDF4LLM fallback also failed: {ep}")
                 return []
 
-        # --- DEBUG: Save Intermediate Markdown ---
-        try:
-            debug_dir = os.path.join(os.getcwd(), "generated_doc_md")
-            if not os.path.exists(debug_dir):
-                os.makedirs(debug_dir)
-            
-            # Use a more unique debug path: 
-            # replace slashes with underscores for a flat debug dir
-            unique_name = file_path.replace(os.sep, "_").strip("_")
-            base_name = os.path.splitext(unique_name)[0]
-            debug_filename = f"{base_name}_{source_type}.md"
-            debug_path = os.path.join(debug_dir, debug_filename)
-            
-            with open(debug_path, "w", encoding="utf-8") as f:
-                f.write(md_content)
-            logger.info(f"🔬 [DEBUG] Saved intermediate Markdown to: {debug_path}")
-        except Exception as edebug:
-            logger.warning(f"Failed to save debug Markdown: {edebug}")
+        raw_md_content = md_content
+        normalization_manifest = None
+        if llm_normalize:
+            normalization = LlmMarkdownNormalizer(NormalizationOptions(enabled=True)).normalize(
+                md_content,
+                filename=filename,
+                doc_type=doc_type,
+                parser=source_type,
+            )
+            md_content = normalization.markdown
+            normalization_manifest = normalization.manifest
+            parser_outputs["llm_normalized"] = md_content
+            source_type = f"{source_type}_llm_normalized" if normalization.accepted else source_type
 
         # --- NEW: Folder-Based Strategy Selection ---
-        normalized_path = file_path.replace('\\', '/')
+        diagnostics = analyze_markdown(md_content, parser=source_type, source_type=source_type)
+        parsed_doc = ParsedDocument(
+            file_path=file_path,
+            filename=filename,
+            doc_type=doc_type,
+            markdown=md_content,
+            selected_parser=source_type,
+            diagnostics=diagnostics,
+            parser_outputs=parser_outputs,
+            raw_markdown=raw_md_content,
+            normalization_manifest=normalization_manifest,
+        )
         if '/qna/' in normalized_path.lower():
             logger.info(f"Folder-based routing: Treating {filename} as Q&A document.")
-            qna_chunks = self.process_qna_content(md_content, file_path)
+            qna_chunks = QnAChunker().chunk(md_content, file_path)
             if qna_chunks:
+                for chunk in qna_chunks:
+                    chunk["metadata"].setdefault("parser", source_type)
+                save_parse_artifacts(parsed_doc, qna_chunks)
                 return qna_chunks
             logger.info(f"No Q&A patterns found in {filename}, falling back to hierarchical chunking.")
 
-        # Smarter Hierarchical Chunking (Platinum Implementation)
-        import re
+        base_source_type = source_type.replace("_llm_normalized", "")
+        if source_type.endswith("_llm_normalized") and base_source_type in {"docling", "pymupdf", "pymupdf4llm", "docling_vision", "markdown"}:
+            processed_chunks = NormalizedMarkdownChunker(chunk_size=chunk_size).chunk(
+                md_content,
+                file_path=file_path,
+                filename=filename,
+                source_type=source_type,
+            )
+            logger.info(f"Successfully processed {filename} into {len(processed_chunks)} normalized structure-aware chunks.")
+        elif base_source_type in {"vision_llm", "pymupdf", "pymupdf4llm", "docling", "docling_vision", "markdown"}:
+            processed_chunks = VisionChunker(chunk_size=chunk_size).chunk(
+                md_content,
+                file_path=file_path,
+                filename=filename,
+                source_type=source_type,
+            )
+            logger.info(f"Successfully processed {filename} into {len(processed_chunks)} structure-aware chunks.")
+        elif extract_markdown_tables(md_content):
+            processed_chunks = GeneralChunker(chunk_size=chunk_size).chunk(
+                md_content,
+                file_path=file_path,
+                filename=filename,
+                source_type=source_type,
+            )
+            logger.info(f"Successfully processed {filename} into {len(processed_chunks)} table-aware chunks.")
+        else:
+            processed_chunks = self._build_hierarchical_chunks(
+                md_content,
+                file_path=file_path,
+                filename=filename,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
         
-        # Regex updated to support H6 and optional space after '#'
-        header_pattern = r'(?m)^(#{1,6}\s?.*)$'
-        parts = re.split(header_pattern, md_content)
-        
-        raw_chunks = []
-        header_stack = [] # Tracks levels: [H1, H2, H3, H4, H5, H6]
-        current_path = "Intro"
-        current_chunk = ""
-        
-        def get_breadcrumb(stack):
-            return " > ".join(stack) if stack else "Intro"
+        for chunk in processed_chunks:
+            chunk["metadata"].setdefault("parser", source_type)
+        save_parse_artifacts(parsed_doc, processed_chunks)
+        logger.info(f"Successfully processed {filename} into {len(processed_chunks)} chunks.")
+        return processed_chunks
 
-        for part in parts:
-            if not part.strip():
-                continue
-            
-            # If it's a header, update the tracked header stack
-            is_header = bool(re.match(header_pattern, part))
-            if is_header:
-                # Save previous accumulated chunk before switching path
-                if current_chunk:
-                    raw_chunks.append({
-                        "text": current_chunk.strip(),
-                        "path": current_path,
-                        "level": len(header_stack)
-                    })
-                
-                # Determine header level by counting '#'
-                level = part.count('#')
-                title = part.strip().lstrip('#').strip()
-                
-                header_stack = header_stack[:level-1] + [title]
-                current_path = get_breadcrumb(header_stack)
-                current_chunk = ""
-                continue
+    def parse_to_markdown(self, file_path: str, mode: str = "auto", doc_type: Optional[str] = None):
+        normalized_path = file_path.replace('\\', '/')
+        resolved_doc_type = doc_type or ("qna" if "/qna/" in normalized_path.lower() else "general")
+        return parse_to_markdown(
+            file_path=file_path,
+            mode=mode,
+            doc_type=resolved_doc_type,
+            converter_factory=self._get_converter,
+            scanned_detector=self._is_scanned_pdf,
+            clean_markdown=self._clean_markdown_artifacts,
+            fix_header_hierarchy=self._fix_header_hierarchy,
+        )
 
-            def smart_split_text(text, max_size, overlap):
-                """
-                Splits text with STRICT TABLE ISOLATION and FRE Metadata.
-                """
-                lines = text.split('\n')
-                chunks = []
-                current_chunk = []
-                current_len = 0
-                
-                in_table = False
-                table_header = [] 
+    def _build_hierarchical_chunks(
+        self,
+        md_content: str,
+        file_path: str,
+        filename: str,
+        chunk_size: int = 1400,
+        chunk_overlap: int = 180,
+    ) -> List[Dict[str, Any]]:
+        """
+        Build section-aware chunks from normalized Markdown.
 
-                for i, line in enumerate(lines):
-                    line_len = len(line) + 1 
-                    is_table_row = line.strip().startswith('|')
-                    
-                    if is_table_row and not in_table:
-                        in_table = True
-                        if current_chunk:
-                            chunks.append({
-                                'text': '\n'.join(current_chunk),
-                                'is_fragment': False,
-                                'has_table': False
-                            })
-                            current_chunk = []
-                            current_len = 0
+        The previous implementation split on regex captures and then arbitrary
+        character counts, which could detach a paragraph/table from its heading.
+        This path first creates explicit section blocks and then splits only
+        inside each section while preserving the breadcrumb in every chunk.
+        """
+        normalized = self._normalize_markdown_structure(md_content)
+        sections = self._extract_sections(normalized)
+        doc_id = _stable_doc_id(file_path)
 
-                        # STICKY CAPTION & MULTI-LINE HEADER
-                        caption_lines = []
-                        if i > 0 and lines[i-1].strip():
-                             prev_line = lines[i-1].strip()
-                             if len(prev_line) < 100 or prev_line.lower().startswith("table") or prev_line.startswith("#"):
-                                 caption_lines.insert(0, lines[i-1])
-                                 current_chunk.extend(caption_lines)
-                                 current_len += sum(len(c)+1 for c in caption_lines)
-                        
-                        # Capture FULL table header (Caption + Headers + Separator)
-                        table_header = caption_lines + [line]
-                        if i + 1 < len(lines) and '---' in lines[i+1]:
-                             table_header.append(lines[i+1])
+        raw_chunks: List[Dict[str, Any]] = []
+        for section in sections:
+            for part in self._split_section(section, max_size=chunk_size, overlap=chunk_overlap):
+                raw_chunks.append(part)
 
-                    if not is_table_row and in_table:
-                        in_table = False
-                        table_header = []
-                        if current_chunk:
-                            chunks.append({
-                                'text': '\n'.join(current_chunk),
-                                'is_fragment': False,
-                                'has_table': True
-                            })
-                            current_chunk = []
-                            current_len = 0
-                            
-                    if current_len + line_len > max_size:
-                        if current_chunk:
-                            chunks.append({
-                                'text': '\n'.join(current_chunk),
-                                'is_fragment': True,
-                                'has_table': in_table
-                            })
-                        current_chunk = []
-                        current_len = 0
-                        if in_table and table_header:
-                            current_chunk.extend(table_header)
-                            current_len += sum(len(h) + 1 for h in table_header)
-
-                    current_chunk.append(line)
-                    current_len += line_len
-
-                if current_chunk:
-                    chunks.append({
-                        'text': '\n'.join(current_chunk),
-                        'is_fragment': len(chunks) > 0,
-                        'has_table': in_table
-                    })
-                
-                # Add indices
-                for idx, c in enumerate(chunks):
-                    c['fragment_index'] = idx
-                    c['total_fragments'] = len(chunks)
-                
-                return chunks
-
-            # Trigger Smart Split if:
-            # 1. Section is too large (needs chunking)
-            # 2. Section contains a Table (needs Isolation/Sticky headers)
-            has_table_marker = bool(re.search(r'(?m)^\|', part))
-            
-            if len(part) > 2000 or has_table_marker:
-                # Save any existing chunk before split
-                if current_chunk:
-                    has_table_simple = '|' in current_chunk
-                    raw_chunks.append({
-                        "text": current_chunk.strip(),
-                        "path": current_path,
-                        "level": len(header_stack),
-                        "has_table": has_table_simple
-                    })
-                
-                sub_chunks = smart_split_text(part, 2000, 400)
-                for i, sc in enumerate(sub_chunks):
-                    raw_chunks.append({
-                        "text": sc['text'].strip(),
-                        "path": current_path + (f" (Part {i+1})" if len(sub_chunks) > 1 else ""),
-                        "level": len(header_stack),
-                        "is_fragment": sc['is_fragment'],
-                        "has_table": sc['has_table']
-                    })
-                current_chunk = "" 
-            else:
-                if len(current_chunk) + len(part) > 2000:
-                    if current_chunk:
-                        has_table_simple = '|' in current_chunk
-                        raw_chunks.append({
-                            "text": current_chunk.strip(),
-                            "path": current_path,
-                            "level": len(header_stack),
-                            "has_table": has_table_simple
-                        })
-                        
-                        overlap_text = current_chunk[-400:] if len(current_chunk) > 400 else current_chunk
-                        current_chunk = overlap_text + "\n" + part
-                    else:
-                        current_chunk = part
-                else:
-                    current_chunk += "\n" + part
-        
-        if current_chunk:
-            has_table_simple = '|' in current_chunk
-            raw_chunks.append({
-                "text": current_chunk.strip(),
-                "path": current_path,
-                "level": len(header_stack),
-                "has_table": has_table_simple
-            })
-            
         processed_chunks = []
-        
-        for idx, chunk_data in enumerate(raw_chunks):
-            # Platinum Prefix Injunction
-            path = chunk_data["path"]
-            content = chunk_data["text"]
-            platinum_text = f"[Doc: {filename} | Path: {path}]\n{content}"
-            
+        summary_text = self._build_doc_summary(normalized, filename)
+        if summary_text:
             processed_chunks.append({
-                "text": platinum_text,
+                "text": summary_text,
                 "metadata": {
                     "source": file_path,
+                    "doc_id": doc_id,
+                    "filename": filename,
+                    "chunk_index": 0,
+                    "next_index": 1 if raw_chunks else -1,
+                    "prev_index": -1,
+                    "section_path": "Document Summary",
+                    "section_title": "Document Summary",
+                    "header_level": 0,
+                    "is_fragment": False,
+                    "fragment_index": 0,
+                    "total_fragments": 1,
+                    "has_table": False,
+                    "start_line": 0,
+                    "end_line": 0,
+                    "doc_type": "general",
+                    "chunk_kind": "doc_summary",
+                }
+            })
+
+        base_index = len(processed_chunks)
+        for offset, chunk_data in enumerate(raw_chunks):
+            idx = base_index + offset
+            path = chunk_data["path"]
+            content = chunk_data["text"].strip()
+            title = chunk_data.get("title") or path.split(" > ")[-1]
+            context_prefix = f"[Doc: {filename} | Section: {path}]\n# {title}\n"
+            chunk_text = context_prefix + content
+
+            processed_chunks.append({
+                "text": chunk_text,
+                "metadata": {
+                    "source": file_path,
+                    "doc_id": doc_id,
                     "filename": filename,
                     "chunk_index": idx,
-                    "next_index": idx + 1 if idx < len(raw_chunks) - 1 else -1,
+                    "next_index": idx + 1 if offset < len(raw_chunks) - 1 else -1,
                     "prev_index": idx - 1 if idx > 0 else -1,
                     "section_path": path,
+                    "section_title": title,
                     "header_level": chunk_data.get("level", 0),
                     "is_fragment": chunk_data.get("is_fragment", False),
                     "fragment_index": chunk_data.get("fragment_index", 0),
                     "total_fragments": chunk_data.get("total_fragments", 1),
                     "has_table": chunk_data.get("has_table", False),
-                    "doc_type": "general"
+                    "start_line": chunk_data.get("start_line", 0),
+                    "end_line": chunk_data.get("end_line", 0),
+                    "doc_type": "general",
+                    "chunk_kind": "body",
                 }
             })
-        
-        logger.info(f"Successfully processed {filename} into {len(processed_chunks)} hierarchical chunks.")
         return processed_chunks
+
+    def _build_doc_summary(self, markdown: str, filename: str, max_chars: int = 1800) -> str:
+        """Create a deterministic document-level summary chunk for recall/fallback."""
+        lines = markdown.splitlines()
+        headings = []
+        body_parts = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+            if heading and len(headings) < 12:
+                headings.append(heading.group(2).strip())
+                continue
+            if not stripped.startswith("|") and len(body_parts) < 8:
+                body_parts.append(stripped)
+
+        parts = []
+        if headings:
+            parts.append("Key sections: " + "; ".join(headings))
+        if body_parts:
+            parts.append("Opening content: " + " ".join(body_parts))
+        if not parts:
+            return ""
+
+        content = " ".join(parts)
+        if len(content) > max_chars:
+            content = content[:max_chars].rsplit(" ", 1)[0].strip()
+        return f"[Doc: {filename} | Section: Document Summary]\n# Document Summary\n{content}"
+
+    def _normalize_markdown_structure(self, text: str) -> str:
+        """Repair common PDF-to-Markdown structural artifacts before chunking."""
+        text = self._clean_markdown_artifacts(text)
+        text = self._fix_header_hierarchy(text)
+        lines = text.splitlines()
+        normalized = []
+        previous_blank = False
+
+        heading_like = re.compile(
+            r"^\s*(?:(\d+(?:\.\d+){0,5})\.?\s+)?"
+            r"([A-Z][A-Z0-9 &,/()'\-]{5,}|[A-Z][A-Za-z0-9 &,/()'\-]{3,80})\s*$"
+        )
+
+        for raw in lines:
+            line = raw.rstrip()
+            stripped = line.strip()
+
+            if not stripped:
+                if not previous_blank:
+                    normalized.append("")
+                previous_blank = True
+                continue
+            previous_blank = False
+
+            # Normalize malformed Markdown headings like "#Title" without
+            # corrupting valid "## Title" headings.
+            line = re.sub(r"^(#{1,6})([^#\s])", r"\1 \2", line)
+
+            if not line.startswith("#") and not line.startswith("|"):
+                match = heading_like.match(stripped)
+                if match and len(stripped.split()) <= 12 and not stripped.endswith((".", ",", ";", ":")):
+                    numbering = match.group(1)
+                    if numbering:
+                        depth = min(6, 1 + len([p for p in numbering.split(".") if p]))
+                    elif stripped.isupper():
+                        depth = 2
+                    else:
+                        depth = 3
+                    line = f"{'#' * depth} {stripped}"
+
+            normalized.append(line)
+
+        return "\n".join(normalized).strip()
+
+    def _extract_sections(self, markdown: str) -> List[SectionBlock]:
+        """Convert Markdown into hierarchical section blocks."""
+        lines = markdown.splitlines()
+        sections: List[SectionBlock] = []
+        stack: List[str] = []
+        current_lines: List[str] = []
+        current_path = "Intro"
+        current_title = "Intro"
+        current_level = 0
+        start_line = 1
+
+        def flush(end_line: int):
+            nonlocal current_lines, start_line
+            content = "\n".join(current_lines).strip()
+            if content:
+                sections.append(SectionBlock(
+                    path=current_path,
+                    level=current_level,
+                    title=current_title,
+                    text=content,
+                    start_line=start_line,
+                    end_line=end_line,
+                ))
+            current_lines = []
+
+        for idx, line in enumerate(lines, start=1):
+            heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+            if heading:
+                flush(idx - 1)
+                current_level = len(heading.group(1))
+                current_title = heading.group(2).strip()
+                stack = stack[:current_level - 1] + [current_title]
+                current_path = " > ".join(stack) if stack else current_title
+                start_line = idx
+                continue
+            current_lines.append(line)
+
+        flush(len(lines))
+        if not sections and markdown.strip():
+            sections.append(SectionBlock(
+                path="Intro",
+                level=0,
+                title="Intro",
+                text=markdown.strip(),
+                start_line=1,
+                end_line=len(lines),
+            ))
+        return sections
+
+    def _split_section(self, section: SectionBlock, max_size: int, overlap: int) -> List[Dict[str, Any]]:
+        """Split one section without breaking tables and with stable overlap."""
+        blocks = self._paragraph_blocks(section.text)
+        chunks: List[Dict[str, Any]] = []
+        current: List[str] = []
+        current_len = 0
+        current_has_table = False
+
+        def emit(is_fragment: bool):
+            nonlocal current, current_len, current_has_table
+            if not current:
+                return
+            chunks.append({
+                "text": "\n\n".join(current).strip(),
+                "path": section.path,
+                "title": section.title,
+                "level": section.level,
+                "is_fragment": is_fragment,
+                "has_table": current_has_table,
+                "start_line": section.start_line,
+                "end_line": section.end_line,
+            })
+            tail = self._overlap_tail("\n\n".join(current), overlap)
+            current = [tail] if tail and is_fragment else []
+            current_len = len(tail) if current else 0
+            current_has_table = False
+
+        for block in blocks:
+            block_len = len(block) + 2
+            block_has_table = any(line.strip().startswith("|") for line in block.splitlines())
+
+            if block_len > max_size:
+                emit(is_fragment=bool(chunks))
+                for part in self._split_large_block(block, max_size=max_size, overlap=overlap):
+                    chunks.append({
+                        "text": part.strip(),
+                        "path": section.path,
+                        "title": section.title,
+                        "level": section.level,
+                        "is_fragment": True,
+                        "has_table": block_has_table,
+                        "start_line": section.start_line,
+                        "end_line": section.end_line,
+                    })
+                continue
+
+            if current and current_len + block_len > max_size:
+                emit(is_fragment=bool(chunks))
+
+            current.append(block)
+            current_len += block_len
+            current_has_table = current_has_table or block_has_table
+
+        emit(is_fragment=bool(chunks))
+
+        total = len(chunks)
+        for idx, chunk in enumerate(chunks):
+            chunk["fragment_index"] = idx
+            chunk["total_fragments"] = total
+            chunk["is_fragment"] = total > 1
+        return chunks
+
+    def _paragraph_blocks(self, text: str) -> List[str]:
+        """Group text into paragraphs and full Markdown tables."""
+        lines = text.splitlines()
+        blocks = []
+        current = []
+        in_table = False
+
+        def flush():
+            nonlocal current
+            if current:
+                blocks.append("\n".join(current).strip())
+                current = []
+
+        for line in lines:
+            stripped = line.strip()
+            is_table = stripped.startswith("|")
+            if is_table:
+                if not in_table:
+                    flush()
+                    in_table = True
+                current.append(line)
+                continue
+
+            if in_table:
+                flush()
+                in_table = False
+
+            if not stripped:
+                flush()
+            else:
+                current.append(line)
+
+        flush()
+        return [b for b in blocks if b]
+
+    def _split_large_block(self, text: str, max_size: int, overlap: int) -> List[str]:
+        """Sentence-aware fallback for a paragraph larger than the target chunk."""
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        parts = []
+        current = ""
+        for sentence in sentences:
+            if len(current) + len(sentence) + 1 > max_size and current:
+                parts.append(current.strip())
+                tail = self._overlap_tail(current, overlap)
+                current = f"{tail} {sentence}".strip() if tail else sentence
+            else:
+                current = f"{current} {sentence}".strip()
+        if current:
+            parts.append(current.strip())
+        return parts
+
+    def _overlap_tail(self, text: str, overlap: int) -> str:
+        if overlap <= 0 or len(text) <= overlap:
+            return ""
+        tail = text[-overlap:]
+        boundary = max(tail.rfind(". "), tail.rfind("! "), tail.rfind("? "), tail.rfind("\n\n"))
+        return tail[boundary + 1:].strip() if boundary > 0 else ""
 
     def _clean_markdown_artifacts(self, text: str) -> str:
         """
@@ -652,8 +954,9 @@ class DocumentProcessor:
             # Expanded list of common welding particles
             welding_particles = ['and', 'of', 'the', 'is', 'to', 'in', 'for', 'with']
             for p in welding_particles:
-                # Fix "Loadand" -> "Load and" (Case-insensitive match for the particle)
-                content = re.sub(r'([a-z])(' + p + r')([A-Z]?)', r'\1 \2 \3', content, flags=re.I)
+                # Fix "LoadandNext" -> "Load and Next" without splitting
+                # valid words such as "Training" or "within".
+                content = re.sub(r'([a-z]{3,})(' + p + r')([A-Z])', r'\1 \2 \3', content)
             
             # word.Word -> word. Word
             content = re.sub(r'([a-z])\.([A-Z][a-z])', r'\1. \2', content)
@@ -806,6 +1109,7 @@ class DocumentProcessor:
         from backend.ingestion.qna_patterns import extract_qa_pairs
         
         filename = os.path.basename(file_path)
+        doc_id = _stable_doc_id(file_path)
         
         # Extract Q&A pairs using pattern detection
         qa_pairs = extract_qa_pairs(md_content, filename)
@@ -856,6 +1160,7 @@ class DocumentProcessor:
                     "text": platinum_text,
                     "metadata": {
                         "source": file_path,
+                        "doc_id": doc_id,
                         "filename": filename,
                         "doc_type": "qna",
                         "chunk_index": len(processed_chunks),
@@ -865,7 +1170,8 @@ class DocumentProcessor:
                         "is_atomic": True,
                         "is_fragment": False,
                         "fragment_index": 0,
-                        "total_fragments": 1
+                        "total_fragments": 1,
+                        "chunk_kind": "qna"
                     }
                 })
             else:
@@ -910,6 +1216,7 @@ class DocumentProcessor:
                         "text": platinum_text,
                         "metadata": {
                             "source": file_path,
+                            "doc_id": doc_id,
                             "filename": filename,
                             "doc_type": "qna",
                             "chunk_index": len(processed_chunks),
@@ -919,7 +1226,8 @@ class DocumentProcessor:
                             "is_atomic": False,
                             "is_fragment": True,
                             "fragment_index": frag_idx,
-                            "total_fragments": total_fragments
+                            "total_fragments": total_fragments,
+                            "chunk_kind": "qna"
                         }
                     })
         

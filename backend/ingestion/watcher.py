@@ -12,6 +12,7 @@ import logging
 import queue
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from backend.config import get_config
 from backend.ingestion.processor import DocumentProcessor
 from backend.rag.store import get_vector_store
 from backend.llm.client import OllamaClientWrapper
@@ -124,8 +125,19 @@ class IngestionWorker:
         logger.info(f"Worker processing file in parallel: {filename}")
         
         try:
-            # Sync extraction call run in thread pool
-            chunks = await asyncio.to_thread(self.processor.process_file, file_path)
+            cfg = get_config()
+            mode = cfg.parsing_mode if cfg.parsing_mode != "auto" else "docling"
+            llm_normalize = cfg.ingest_llm_normalize or mode == "docling"
+
+            # Sync extraction call run in thread pool. Server-side uploads default
+            # to Docling + LLM normalization unless config explicitly chooses a
+            # different parser mode.
+            chunks = await asyncio.to_thread(
+                self.processor.process_file,
+                file_path,
+                mode=mode,
+                llm_normalize=llm_normalize,
+            )
             
             if not chunks:
                 logger.warning(f"No chunks extracted from {filename}")
@@ -144,7 +156,10 @@ class IngestionWorker:
         
         texts = [c['text'] for c in chunks]
         metadatas = [c['metadata'] for c in chunks]
-        ids = [f"{c['metadata']['source']}_{c['metadata']['chunk_index']}" for c in chunks]
+        ids = [
+            f"{c['metadata'].get('doc_id') or c['metadata']['source']}_{c['metadata']['chunk_index']}"
+            for c in chunks
+        ]
         
         # Batch embedding
         BATCH_SIZE = 50

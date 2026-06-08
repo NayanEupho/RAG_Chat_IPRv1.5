@@ -89,9 +89,6 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
         raise HTTPException(status_code=403, detail="Not authorized to access this session")
 
     create_session(request_body.session_id, user_id=user.user_id)
-    
-    # Log User Message Immediately
-    add_message(request_body.session_id, "user", request_body.message)
 
     config = {"configurable": {"thread_id": request_body.session_id}}
     inputs = {
@@ -105,10 +102,15 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
         final_intent = "unknown"
         final_docs = []
         thoughts = []
+        ttft_start = None
+        ttft_logged = False
+        node_starts = {}
+        node_timings = {}
+        generator_start_ms = None
+        generator_first_token_ms = None
         
         try:
             # 1. Flush Padding (Immediate response to stop buffering in proxies)
-            # Increased to 4KB for extreme stability in strict proxies/browsers
             padding = ":" + (" " * 4096) + " padding to flush buffer\n\n"
             yield padding
             
@@ -116,6 +118,9 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             thoughts.append({"type": "status", "content": initial_status})
             logger.info(f"[STREAM] Emitting status: {initial_status}")
             yield f"event: status\ndata: {initial_status}\n\n"
+            
+            import time
+            ttft_start = time.monotonic()
             
             async for event in get_graph().astream_events(inputs, config=config, version="v1"):
                 # CHECK FOR DISCONNECTION
@@ -127,6 +132,11 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                 
                 if event_type == "on_chain_start":
                     name = event["name"]
+                    if ttft_start and name in {"router", "planner", "rewriter", "retriever", "generator"}:
+                        node_starts[name] = time.monotonic()
+                        node_timings.setdefault(name, {})["start_ms"] = int((node_starts[name] - ttft_start) * 1000)
+                        if name == "generator":
+                            generator_start_ms = node_timings[name]["start_ms"]
                     status_data = None
                     if name == "router" or name == "planner":
                          status_data = "Analyzing Intent..."
@@ -144,6 +154,13 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                          logger.info(f"[STREAM] Emitting status: {status_data}")
                          yield f"event: status\ndata: {status_data}\n\n"
 
+                if event_type == "on_chain_end":
+                    name = event["name"]
+                    if ttft_start and name in node_starts:
+                        elapsed_ms = int((time.monotonic() - node_starts[name]) * 1000)
+                        node_timings.setdefault(name, {})["duration_ms"] = elapsed_ms
+                        node_timings[name]["end_ms"] = int((time.monotonic() - ttft_start) * 1000)
+
                 if event_type == "on_chat_model_stream":
                     meta = event.get("metadata", {})
                     node = meta.get("langgraph_node", "")
@@ -152,9 +169,21 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                         chunk = event["data"]["chunk"]
                         if hasattr(chunk, 'content') and chunk.content:
                             import json
+                            if not ttft_logged and ttft_start:
+                                ttft_logged = True
+                                ttft_ms = int((time.monotonic() - ttft_start) * 1000)
+                                generator_first_token_ms = ttft_ms
+                                if "generator" in node_timings:
+                                    start_ms = node_timings["generator"].get("start_ms")
+                                    if start_ms is not None:
+                                        node_timings["generator"]["first_token_after_start_ms"] = ttft_ms - start_ms
+                                logger.warning(f"[TTFT] First token at {ttft_ms}ms for session {request_body.session_id}")
+                                try:
+                                    add_message(request_body.session_id, "user", request_body.message)
+                                except Exception as e:
+                                    logger.warning(f"[STREAM] Failed to log user message: {e}")
                             clean_token = json.dumps(chunk.content)
                             full_response += chunk.content
-                            # logger.debug(f"[STREAM] Emitting token: {chunk.content[:10]}...") 
                             yield f"event: token\ndata: {clean_token}\n\n"
                     else:
                         logger.warning(f"[STREAM] Token received from unexpected node: {node}")
@@ -164,15 +193,27 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             final_intent = final_state.values.get("intent", "unknown")
             final_docs = final_state.values.get("documents", [])
             targeted_docs = final_state.values.get("targeted_docs", [])
+            retrieval_metrics = final_state.values.get("retrieval_metrics", {})
             
             # Pass documents exactly as retrieved
             deduped_docs = final_docs
 
             import json
+            ttft_ms = int((time.monotonic() - ttft_start) * 1000) if ttft_start else 0
+            timings = {
+                "ttft_ms": generator_first_token_ms or ttft_ms,
+                "total_backend_ms": ttft_ms,
+                "generator_start_ms": generator_start_ms,
+                "generator_first_token_ms": generator_first_token_ms,
+                "nodes": node_timings,
+            }
             metadata = json.dumps({
                 "intent": final_intent, 
                 "sources": deduped_docs,
-                "targeted_docs": targeted_docs
+                "targeted_docs": targeted_docs,
+                "ttft_ms": timings["ttft_ms"],
+                "timings": timings,
+                "retrieval_metrics": retrieval_metrics
             })
             yield f"event: end\ndata: {metadata}\n\n"
 
@@ -183,9 +224,20 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                 full_response, 
                 final_intent, 
                 deduped_docs, 
-                metadata={"targeted_docs": targeted_docs},
+                metadata={"targeted_docs": targeted_docs, "ttft_ms": ttft_ms},
                 thoughts=thoughts
             )
+
+            # Persist summary to sessions table
+            summary = final_state.values.get("summary", "")
+            if summary:
+                try:
+                    from backend.state.history import get_connection
+                    conn = get_connection()
+                    conn.execute("UPDATE sessions SET summary = ? WHERE session_id = ?", (summary, request_body.session_id))
+                    conn.commit()
+                except Exception as e:
+                    logger.warning(f"[STREAM] Failed to persist summary: {e}")
         
         except Exception as e:
             logger.error(f"[STREAM] Error in sse_generator: {e}")
@@ -255,8 +307,17 @@ def get_config_route():
             "reranker_model": cfg.reranker_model,
             "rag_confidence_threshold": cfg.rag_confidence_threshold,
             "retrieval_top_k": cfg.retrieval_top_k,
+            "retrieval_detail_top_k": cfg.retrieval_detail_top_k,
+            "retrieval_deep_top_k": cfg.retrieval_deep_top_k,
             "ingest_force_cpu": cfg.ingest_force_cpu,
-            "vlm_model": cfg.vlm_model
+            "ingest_llm_normalize": cfg.ingest_llm_normalize,
+            "vlm_model": cfg.vlm_model,
+            "parsing_mode": cfg.parsing_mode,
+            "model_context_window": cfg.model_context_window,
+            "is_thinking_model": cfg.is_thinking_model,
+            "no_thinking": cfg.no_thinking,
+            "num_predict": cfg.num_predict,
+            "temperature": cfg.temperature
         }
     except Exception as e:
         return {"error": f"Config error: {str(e)}"}
@@ -320,6 +381,7 @@ async def status():
         
         return {
             "status": overall_status,
+            "python_version": __import__("sys").version.split()[0],
             "main_model_healthy": main_result["healthy"],
             "main_model_error": main_result["error"],
             "main_model_name": cfg.main_model.model_name if cfg.main_model else "Not Configured",
@@ -330,6 +392,7 @@ async def status():
     except Exception as e:
         return {
             "status": "offline",
+            "python_version": __import__("sys").version.split()[0],
             "main_model_healthy": False,
             "main_model_error": str(e),
             "embed_model_healthy": False,

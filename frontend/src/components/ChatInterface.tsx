@@ -9,7 +9,7 @@
  * - Navigation and session management.
  */
 import { useChat } from '@/hooks/useChat';
-import { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Sidebar from './Sidebar';
 import UserMenu from './UserMenu';
 import ThinkingProcess from './ThinkingProcess';
@@ -27,13 +27,14 @@ import ModeSelector, { InteractionMode } from './ModeSelector';
 
 export default function ChatInterface() {
     const {
-        messages, setMessages, sendMessage, loading, currentStatus,
+        messages, setMessages, sendMessage, loading,
         sessionId, stopGeneration, fetchDocuments,
         setSessionId, loadHistory
     } = useChat();
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const scrollFrameRef = useRef<number | null>(null);
     const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -54,6 +55,7 @@ export default function ChatInterface() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [modalContent, setModalContent] = useState<any>([]);
     const [modalType, setModalType] = useState<'source' | 'docs'>('source');
+    const [expandedSources, setExpandedSources] = useState<Record<number, boolean>>({});
 
     // @Mentions State
     const [allDocs, setAllDocs] = useState<string[]>([]);
@@ -61,6 +63,7 @@ export default function ChatInterface() {
     const [showMentions, setShowMentions] = useState(false);
     const [mentionQuery, setMentionQuery] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
+    const [mentionPosition, setMentionPosition] = useState<{ left: number; top: number } | null>(null);
     const [loadingDocs, setLoadingDocs] = useState(false);
     const [activeMode, setActiveMode] = useState<InteractionMode>('auto');
 
@@ -78,8 +81,23 @@ export default function ChatInterface() {
 
     // Auto-scroll to bottom
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, currentStatus]);
+        if (scrollFrameRef.current !== null) return;
+
+        scrollFrameRef.current = window.requestAnimationFrame(() => {
+            scrollFrameRef.current = null;
+            bottomRef.current?.scrollIntoView({
+                behavior: loading ? 'auto' : 'smooth',
+                block: 'end'
+            });
+        });
+
+        return () => {
+            if (scrollFrameRef.current !== null) {
+                window.cancelAnimationFrame(scrollFrameRef.current);
+                scrollFrameRef.current = null;
+            }
+        };
+    }, [messages, loading]);
 
     // Auto-resize textarea
     const adjustTextareaHeight = useCallback(() => {
@@ -131,6 +149,55 @@ export default function ChatInterface() {
         }
     };
 
+    const updateMentionPosition = useCallback((textarea: HTMLTextAreaElement, cursorPos: number) => {
+        const styles = window.getComputedStyle(textarea);
+        const mirror = document.createElement('div');
+        const properties: Array<[string, string]> = [
+            ['box-sizing', 'box-sizing'],
+            ['width', 'width'],
+            ['font-family', 'font-family'],
+            ['font-size', 'font-size'],
+            ['font-weight', 'font-weight'],
+            ['letter-spacing', 'letter-spacing'],
+            ['line-height', 'line-height'],
+            ['padding-top', 'padding-top'],
+            ['padding-right', 'padding-right'],
+            ['padding-bottom', 'padding-bottom'],
+            ['padding-left', 'padding-left'],
+            ['border-top-width', 'border-top-width'],
+            ['border-right-width', 'border-right-width'],
+            ['border-bottom-width', 'border-bottom-width'],
+            ['border-left-width', 'border-left-width']
+        ];
+
+        properties.forEach(([target, source]) => {
+            mirror.style.setProperty(target, styles.getPropertyValue(source));
+        });
+
+        mirror.style.position = 'fixed';
+        mirror.style.left = `${textarea.getBoundingClientRect().left}px`;
+        mirror.style.top = `${textarea.getBoundingClientRect().top}px`;
+        mirror.style.visibility = 'hidden';
+        mirror.style.whiteSpace = 'pre-wrap';
+        mirror.style.wordBreak = 'break-word';
+        mirror.style.overflowWrap = 'break-word';
+        mirror.style.maxHeight = styles.maxHeight;
+        mirror.style.overflow = 'hidden';
+
+        const beforeCaret = textarea.value.substring(0, cursorPos);
+        const marker = document.createElement('span');
+        marker.textContent = '\u200b';
+        mirror.textContent = beforeCaret;
+        mirror.appendChild(marker);
+        document.body.appendChild(mirror);
+
+        const markerRect = marker.getBoundingClientRect();
+        const left = Math.min(Math.max(12, markerRect.left), window.innerWidth - 332);
+        const top = Math.max(16, markerRect.top - textarea.scrollTop);
+        setMentionPosition({ left, top });
+        document.body.removeChild(mirror);
+    }, []);
+
     const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const value = e.target.value;
         setInputValue(value);
@@ -160,6 +227,7 @@ export default function ChatInterface() {
             setShowMentions(true);
             setMentionQuery(query);
             setMentionIndex(0);
+            updateMentionPosition(e.target, cursorPos);
             return;
         }
         setShowMentions(false);
@@ -198,6 +266,57 @@ export default function ChatInterface() {
             return rawTitle.split('/').pop() || rawTitle;
         }
         return "Document Chunk";
+    };
+
+    const parseEnvelopeMeta = (envelope: string) => {
+        const title = parseEnvelopeTitle(envelope);
+        const section = envelope.match(/Section(?:Path)?:\s*([^\]\n]+)/)?.[1]?.trim();
+        const chunkKind = envelope.match(/ChunkKind:\s*([^\]\n]+)/)?.[1]?.trim();
+        const chunkIndex = envelope.match(/ChunkIndex:\s*([^\]\n]+)/)?.[1]?.trim();
+        const preview = envelope
+            .split('\n')
+            .filter(line => !line.trim().startsWith('['))
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        return {
+            title,
+            section,
+            chunkKind,
+            chunkIndex,
+            preview: preview || envelope.replace(/\s+/g, ' ').trim()
+        };
+    };
+
+    const renderCitationChildren = (children: React.ReactNode, sources?: string[]) => {
+        if (!sources || sources.length === 0) return children;
+
+        return React.Children.map(children, child => {
+            if (typeof child !== 'string') return child;
+
+            const parts = child.split(/(\[\d+\])/g);
+            return parts.map((part, partIdx) => {
+                const match = part.match(/^\[(\d+)\]$/);
+                if (!match) return part;
+
+                const sourceIndex = Number(match[1]) - 1;
+                const source = sources[sourceIndex];
+                if (!source) return part;
+
+                const title = parseEnvelopeTitle(source);
+                return (
+                    <button
+                        key={`${part}-${partIdx}`}
+                        className="inline-citation"
+                        onClick={() => openSourceModal(title, source)}
+                        title={`Open source ${match[1]}: ${title}`}
+                    >
+                        {match[1]}
+                    </button>
+                );
+            });
+        });
     };
 
     const triggerSend = () => {
@@ -297,10 +416,14 @@ export default function ChatInterface() {
             <Sidebar
                 currentSessionId={sessionId}
                 isLoading={loading}
-                onSelectSession={(id) => {
+                onSelectSession={(id, options) => {
                     // Client-side navigation
                     setSessionId(id);
-                    loadHistory(id);
+                    if (options?.loadHistory === false) {
+                        setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }]);
+                    } else {
+                        loadHistory(id);
+                    }
                     localStorage.setItem('rag_session_id', id);
                     router.push(`/?session=${id}`);
                 }}
@@ -312,7 +435,10 @@ export default function ChatInterface() {
 
                 <div className="messages-container">
                     <div className="messages-wrapper">
-                        {messages.map((msg, idx) => (
+                        {messages.map((msg, idx) => {
+                            const sourceList = msg.sources || [];
+
+                            return (
                             <div key={idx} className={`message-row ${msg.role === 'user' ? 'user-row' : 'bot-row'} animate-fade-in-up`}>
                                 <div className={`message-bubble ${msg.role}`}>
                                     {msg.role === 'bot' && (
@@ -344,61 +470,22 @@ export default function ChatInterface() {
                                                     thoughts={msg.thoughts}
                                                     isFinished={!loading || idx !== messages.length - 1}
                                                     ttft={msg.ttft}
+                                                    hasStartedAnswer={msg.content.length > 0}
                                                 />
                                             )}
-
-                                            {/* Premium Source Strip (Top Placement) */}
-                                            {msg.sources && msg.sources.length > 0 && (
-                                                <div className="source-strip custom-scrollbar">
-                                                    {msg.sources.map((src, i) => {
-                                                        // Absolute Text Fidelity: We keep the raw 'src' for the modal.
-                                                        // We only extract a title for the card header.
-                                                        const displayTitle = parseEnvelopeTitle(src);
-                                                        const isTargeted = msg.targeted_docs?.some(d => src.includes(d));
-
-                                                        return (
-                                                            <button
-                                                                key={i}
-                                                                className="source-strip-card"
-                                                                onClick={() => openSourceModal(displayTitle, src)}
-                                                                title={`View Source ${i + 1}`}
-                                                                style={isTargeted ? { borderColor: 'var(--accent-secondary)', boxShadow: '0 0 8px rgba(59, 130, 246, 0.2)' } : {}}
-                                                            >
-                                                                <div className="source-badge" style={isTargeted ? { background: 'var(--accent-secondary)' } : {}}>{i + 1}</div>
-                                                                <div className="source-card-header">
-                                                                    <FileText size={12} />
-                                                                    <div className="source-card-title" style={isTargeted ? { fontWeight: 700 } : {}}>{displayTitle}</div>
-                                                                </div>
-                                                                <div className="source-card-preview" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
-                                                                    {/* Preview first 100 chars of raw envelope to show structure */}
-                                                                    {src.substring(0, 100)}...
-                                                                </div>
-                                                            </button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
                                         </>
-                                    )}
-
-                                    {/* User Message Header */}
-                                    {msg.role === 'user' && (
-                                        <div className="message-meta" style={{ borderBottomColor: 'rgba(255,255,255,0.2)' }}>
-                                            <span style={{ fontSize: '0.75rem', fontWeight: 500, opacity: 0.9 }}>You</span>
-                                            <button
-                                                onClick={() => copyToClipboard(msg.content, idx)}
-                                                style={{ marginLeft: 'auto', opacity: 0.8, display: 'flex', alignItems: 'center' }}
-                                                title="Copy Message"
-                                            >
-                                                {copiedIdx === idx ? <Check size={14} /> : <Copy size={14} />}
-                                            </button>
-                                        </div>
                                     )}
 
                                     <div className="markdown-content">
                                         <ReactMarkdown
                                             remarkPlugins={[remarkGfm]}
                                             components={{
+                                                p({ children }) {
+                                                    return <p>{renderCitationChildren(children, sourceList)}</p>;
+                                                },
+                                                li({ children }) {
+                                                    return <li>{renderCitationChildren(children, sourceList)}</li>;
+                                                },
                                                 code({ className, children, ...props }: { className?: string, children?: React.ReactNode }) {
                                                     const match = /language-(\w+)/.exec(className || '')
                                                     const inline = !className;
@@ -446,10 +533,68 @@ export default function ChatInterface() {
                                         </ReactMarkdown>
                                     </div>
 
+                                    {msg.role === 'bot' && sourceList.length > 0 && (
+                                        <div className="sources-panel">
+                                            <button
+                                                className="sources-panel-header"
+                                                onClick={() => setExpandedSources(prev => ({ ...prev, [idx]: !prev[idx] }))}
+                                                aria-expanded={expandedSources[idx] === true}
+                                            >
+                                                <div className="sources-panel-title">
+                                                    <Database size={14} />
+                                                    Sources
+                                                </div>
+                                                <div className="sources-panel-count">
+                                                    {sourceList.length} chunks
+                                                    <ChevronRight size={14} className={`sources-chevron ${expandedSources[idx] ? 'open' : ''}`} />
+                                                </div>
+                                            </button>
+                                            {expandedSources[idx] && (
+                                                <div className="sources-grid">
+                                                    {sourceList.map((src, i) => {
+                                                        const meta = parseEnvelopeMeta(src);
+                                                        const isTargeted = msg.targeted_docs?.some(d => src.includes(d));
+
+                                                        return (
+                                                            <div key={`${meta.title}-${i}`} className={`source-item ${isTargeted ? 'targeted' : ''}`}>
+                                                                <button
+                                                                    className="source-item-main"
+                                                                    onClick={() => openSourceModal(meta.title, src)}
+                                                                    title={`Open raw chunk ${i + 1}`}
+                                                                >
+                                                                    <span className="source-number">{i + 1}</span>
+                                                                    <span className="source-item-body">
+                                                                        <span className="source-item-title">{meta.title}</span>
+                                                                        {(meta.section || meta.chunkKind || meta.chunkIndex) && (
+                                                                            <span className="source-item-meta">
+                                                                                {[meta.section, meta.chunkKind, meta.chunkIndex ? `chunk ${meta.chunkIndex}` : ''].filter(Boolean).join(' / ')}
+                                                                            </span>
+                                                                        )}
+                                                                        <span className="source-item-preview">{meta.preview}</span>
+                                                                    </span>
+                                                                </button>
+                                                                <button
+                                                                    className="source-file-link"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleOpenFile(meta.title);
+                                                                    }}
+                                                                    title={`Open ${meta.title}`}
+                                                                >
+                                                                    <ArrowUpRight size={14} />
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
 
                                 </div>
                             </div>
-                        ))}
+                            );
+                        })}
                         <div ref={bottomRef} />
                     </div>
                 </div>
@@ -459,10 +604,13 @@ export default function ChatInterface() {
                         {/* Mentions Dropdown */}
                         {showMentions && (
                             <div style={{
-                                position: 'absolute', bottom: '100%', left: 0, marginBottom: '10px',
+                                position: 'fixed',
+                                left: mentionPosition?.left ?? 24,
+                                top: mentionPosition?.top ?? 0,
+                                transform: 'translateY(calc(-100% - 10px))',
                                 background: 'rgba(15, 15, 15, 0.95)', backdropFilter: 'blur(24px)',
                                 border: '1px solid rgba(59, 130, 246, 0.3)',
-                                borderRadius: '12px', width: '280px', overflow: 'hidden', zIndex: 60,
+                                borderRadius: '12px', width: '320px', maxWidth: 'calc(100vw - 24px)', overflow: 'hidden', zIndex: 120,
                                 boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
                                 animation: 'fadeIn 0.2s ease-out'
                             }}>
@@ -527,6 +675,12 @@ export default function ChatInterface() {
                                 className="chat-textarea custom-scrollbar"
                                 placeholder="Ask anything..."
                                 onKeyDown={handleKeyDown}
+                                onKeyUp={(e) => {
+                                    if (showMentions) updateMentionPosition(e.currentTarget, e.currentTarget.selectionStart);
+                                }}
+                                onClick={(e) => {
+                                    if (showMentions) updateMentionPosition(e.currentTarget, e.currentTarget.selectionStart);
+                                }}
                                 onChange={handleTextareaChange}
                                 value={inputValue}
                                 rows={1}

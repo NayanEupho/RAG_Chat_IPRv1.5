@@ -9,6 +9,7 @@ import chromadb
 from chromadb.config import Settings
 import os
 import threading
+import time
 from typing import List, Dict, Any, Optional
 import logging
 
@@ -23,6 +24,8 @@ class VectorStore:
     def __init__(self, persist_dir: str = "chroma_db"):
         self.persist_dir = persist_dir
         self.lock = threading.Lock()
+        self._files_cache = None
+        self._files_cache_at = 0.0
         
         # Initialize ChromaDB Client
         self.client = chromadb.PersistentClient(
@@ -37,6 +40,14 @@ class VectorStore:
         )
         logger.info(f"Vector Store initialized at {persist_dir}")
 
+    def refresh_collection(self):
+        """Reconnect to the persisted collection after an external rebuild."""
+        with self.lock:
+            self.collection = self.client.get_or_create_collection(
+                name="rag_documents",
+                metadata={"hnsw:space": "cosine"}
+            )
+
     def add_documents(self, texts: List[str], metadatas: List[Dict[str, Any]], ids: List[str], embeddings: List[List[float]]):
         """Adds processed chunks with embeddings to the store. Lock protects writes."""
         if not texts:
@@ -49,6 +60,7 @@ class VectorStore:
                 ids=ids,
                 embeddings=embeddings
             )
+            self._files_cache = None
         logger.info(f"[STORE] Added {len(texts)} documents. Total in collection: {self.collection.count()}")
 
     def query(self, query_embeddings: List[List[float]], n_results: int = 5, where: Optional[Dict] = None) -> dict:
@@ -57,6 +69,7 @@ class VectorStore:
         Note: ChromaDB reads are thread-safe, so no lock needed for concurrent queries.
         This removes the read-side bottleneck that was serializing all operations.
         """
+        self.refresh_collection()
         return self.collection.query(
             query_embeddings=query_embeddings,
             n_results=n_results,
@@ -68,6 +81,7 @@ class VectorStore:
         Retrieves documents directly by metadata (filtering without embedding).
         Note: ChromaDB reads are thread-safe, so no lock needed.
         """
+        self.refresh_collection()
         return self.collection.get(
             where=where,
             limit=limit,
@@ -75,12 +89,17 @@ class VectorStore:
         )
 
     def count(self) -> int:
+        self.refresh_collection()
         with self.lock:
             return self.collection.count()
 
     def get_all_files(self) -> List[str]:
         """Returns unique filenames currently indexed (Scalable Pagination)."""
         try:
+            if self._files_cache is not None and (time.monotonic() - self._files_cache_at) < 5.0:
+                return list(self._files_cache)
+
+            self.refresh_collection()
             filenames = set()
             offset = 0
             limit = 500
@@ -105,7 +124,9 @@ class VectorStore:
                     break
                 offset += limit
                 
-            return list(filenames)
+            self._files_cache = sorted(filenames)
+            self._files_cache_at = time.monotonic()
+            return list(self._files_cache)
         except Exception as e:
             logger.error(f"[STORE] Failed to list documents: {e}")
             return []
@@ -115,6 +136,7 @@ class VectorStore:
         with self.lock:
             # ChromaDB supports filtering for deletion
             self.collection.delete(where={"filename": filename})
+            self._files_cache = None
         logger.info(f"[STORE] Deleted all embeddings for file: {filename}")
 
     def clear_all(self):
@@ -128,6 +150,7 @@ class VectorStore:
                     name="rag_documents",
                     metadata={"hnsw:space": "cosine"}
                 )
+                self._files_cache = None
                 logger.info("[STORE] Collection wiped and recreated successfully.")
             except Exception as e:
                 logger.error(f"[STORE] Targeted wipe failed: {e}. Falling back to ID deletion.")

@@ -1,0 +1,79 @@
+{
+  "file_path": "upload_docs\\General\\attention_is_all_you_need.pdf",
+  "filename": "attention_is_all_you_need.pdf",
+  "doc_type": "general",
+  "selected_parser": "docling_llm_normalized",
+  "parser_outputs": [
+    "docling",
+    "llm_normalized"
+  ],
+  "normalization": {
+    "enabled": true,
+    "mode": "llm_markdown",
+    "status": "accepted",
+    "source_parser": "docling",
+    "doc_type": "general",
+    "model": "qwen3.6:35b-a3b-q8_0",
+    "host": "http://10.20.39.12:11438",
+    "raw_char_count": 49024,
+    "normalized_char_count": 45030,
+    "raw_word_count": 6300,
+    "normalized_word_count": 6571,
+    "batch_count": 2,
+    "validation": {
+      "raw_word_count": 6300,
+      "normalized_word_count": 6571,
+      "word_retention_ratio": 1.043,
+      "errors": [],
+      "warnings": []
+    },
+    "batches": [
+      {
+        "batch_id": 1,
+        "input_chars": 40814,
+        "output_chars": 34346,
+        "headings": [
+          "# Attention Is All You Need",
+          "## Abstract",
+          "## 1 Introduction",
+          "## 2 Background",
+          "## 3 Model Architecture",
+          "### 3.1 Encoder and Decoder Stacks",
+          "### 3.2 Attention",
+          "#### 3.2.1 Scaled Dot-Product Attention",
+          "#### 3.2.2 Multi-Head Attention",
+          "#### 3.2.3 Applications of Attention in our Model",
+          "### 3.3 Position-wise Feed-Forward Networks",
+          "### 3.4 Embeddings and Softmax",
+          "### 3.5 Positional Encoding",
+          "## 4 Why Self-Attention",
+          "## 5 Training",
+          "### 5.1 Training Data and Batching",
+          "### 5.2 Hardware and Schedule",
+          "### 5.3 Optimizer",
+          "### 5.4 Regularization",
+          "## 6 Results",
+          "### 6.1 Machine Translation",
+          "### 6.2 Model Variations",
+          "### 6.3 English Constituency Parsing",
+          "## 7 Conclusion"
+        ],
+        "warnings": []
+      },
+      {
+        "batch_id": 2,
+        "input_chars": 10710,
+        "output_chars": 10683,
+        "headings": [
+          "## 7 Conclusion",
+          "## References",
+          "## Attention Visualizations",
+          "### Input-Input Layer 5",
+          "### Input-Input Layer 5",
+          "### Input-Input Layer 5"
+        ],
+        "warnings": []
+      }
+    ]
+  }
+}

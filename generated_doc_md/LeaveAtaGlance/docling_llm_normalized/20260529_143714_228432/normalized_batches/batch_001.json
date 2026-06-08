@@ -1,0 +1,26 @@
+{
+  "batch_id": 1,
+  "input_chars": 25569,
+  "output_chars": 8888,
+  "headings": [
+    "# IPR Leave Rules at a Glance",
+    "## General Provisions",
+    "## Medical Leave Rules",
+    "### Grant of Leave on Medical Grounds",
+    "## Leave Status and Absence",
+    "## Types of Leave",
+    "### Earned Leave (EL)",
+    "### Half Pay Leave (HPL)",
+    "### Commuted Leave",
+    "### Casual Leave (CL)",
+    "### Restricted Holiday (RH)",
+    "### Extra Ordinary Leave (EOL)",
+    "### Leave Not Due (LND)",
+    "### Maternity Leave",
+    "### Child Care Leave (CCL)",
+    "### Child Adoption Leave for Female Employee",
+    "### Paternity Leave",
+    "### Study Leave"
+  ],
+  "warnings": []
+}

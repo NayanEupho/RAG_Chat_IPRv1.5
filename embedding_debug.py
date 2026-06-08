@@ -79,7 +79,7 @@ async def get_system_config():
 
     return config
 
-async def process_and_store_file(file_path: str, store, processor, embed_client, model, dry_run=False, mode="auto"):
+async def process_and_store_file(file_path: str, store, processor, embed_client, model, dry_run=False, mode="auto", llm_normalize=False):
     """Robust 'from scratch' processing for a single file."""
     filename = os.path.basename(file_path)
     
@@ -93,7 +93,7 @@ async def process_and_store_file(file_path: str, store, processor, embed_client,
     # 2. Debug MD saving (Fixes missing QnA MD issue)
     # 3. Strategy routing (QnA vs Hierarchical based on folder)
     try:
-        chunks = processor.process_file(file_path, mode=mode)
+        chunks = processor.process_file(file_path, mode=mode, llm_normalize=llm_normalize)
     except Exception as e:
         logger.error(f"   [ERR] Error processing {filename}: {e}")
         return 0
@@ -109,7 +109,7 @@ async def process_and_store_file(file_path: str, store, processor, embed_client,
     # ... (Embedding logic unchanged) ...
     texts = [c['text'] for c in chunks]
     metadatas = [c['metadata'] for c in chunks]
-    ids = [f"{m['filename']}_{m['chunk_index']}" for m in metadatas]
+    ids = [f"{m.get('doc_id') or m['source']}_{m['chunk_index']}" for m in metadatas]
     
     all_embeddings = []
     BATCH_SIZE = 50
@@ -125,6 +125,14 @@ async def process_and_store_file(file_path: str, store, processor, embed_client,
 
 def determine_mode(args):
     """Parses CLI flags to strict mode string."""
+    if hasattr(args, 'parser') and args.parser:
+        return args.parser
+    if hasattr(args, 'vision') and args.vision:
+        return "vision_llm"
+    if hasattr(args, 'docling') and args.docling:
+        return "docling"
+    if hasattr(args, 'pymupdf') and args.pymupdf:
+        return "pymupdf"
     if hasattr(args, 'pymupdf4llm') and args.pymupdf4llm:
         return "pymupdf4llm"
     if hasattr(args, 'docling_vision') and args.docling_vision:
@@ -133,7 +141,8 @@ def determine_mode(args):
 
 async def cmd_rebuild(args):
     mode = determine_mode(args)
-    print_banner("System-Wide Knowledge Base Rebuild", f"Mode: {mode.upper()}. Clearing database and re-indexing...")
+    action = "Parsing only; vector database will not be modified." if args.dry_run else "Clearing database and re-indexing..."
+    print_banner("System-Wide Knowledge Base Rebuild", f"Mode: {mode.upper()}. {action}")
     
     # Detect Config
     config_vars = await get_system_config()
@@ -150,9 +159,12 @@ async def cmd_rebuild(args):
     embed_client = OllamaClientWrapper.get_embedding_client()
     embed_model = os.environ["RAG_EMBED_MODEL"]
 
-    print("[INFO] Clearing existing vector store...")
-    store.clear()
-    print("[OK] Vector store cleared.")
+    if args.dry_run:
+        print("[INFO] Dry run enabled; existing vector store will not be cleared.")
+    else:
+        print("[INFO] Clearing existing vector store...")
+        store.clear()
+        print("[OK] Vector store cleared.")
 
     print("[INFO] Discovering documents in 'upload_docs'...")
     
@@ -178,7 +190,16 @@ async def cmd_rebuild(args):
     for f_path in all_files:
         fname = os.path.basename(f_path)
         try:
-            count = await process_and_store_file(f_path, store, processor, embed_client, embed_model, dry_run=args.dry_run, mode=mode)
+            count = await process_and_store_file(
+                f_path,
+                store,
+                processor,
+                embed_client,
+                embed_model,
+                dry_run=args.dry_run,
+                mode=mode,
+                llm_normalize=args.llm_normalize,
+            )
             print(f"{fname[:40]:<40} | {count:<8} | [OK] {'Indexed' if not args.dry_run else 'Dry Run'}")
             total_chunks += count
         except Exception as e:
@@ -242,11 +263,23 @@ async def cmd_reindex(args):
     for f_path in target_files:
         fname = os.path.basename(f_path)
         try:
-            # Atomic Deletion
-            store.delete_file(fname)
+            if args.dry_run:
+                print(f"   [INFO] Dry run enabled; existing embeddings for {fname} will not be deleted.")
+            else:
+                # Atomic Deletion
+                store.delete_file(fname)
             
             # Fresh Re-construction
-            count = await process_and_store_file(f_path, store, processor, embed_client, embed_model, dry_run=args.dry_run, mode=mode)
+            count = await process_and_store_file(
+                f_path,
+                store,
+                processor,
+                embed_client,
+                embed_model,
+                dry_run=args.dry_run,
+                mode=mode,
+                llm_normalize=args.llm_normalize,
+            )
             print(f"{fname[:40]:<40} | {count:<8} | [OK] {'Refreshed' if not args.dry_run else 'Dry Run'}")
             total_reindexed += count
         except Exception as e:
@@ -306,6 +339,81 @@ async def cmd_delete(args):
             logger.error(f"Error during deletion of {fname}: {e}")
 
     print(f"\n[DONE] Deletion process complete. Processed {deleted_count} file entries.")
+
+
+async def cmd_parse(args):
+    mode = determine_mode(args)
+    print_banner("Document Parse Preview", f"Parser: {mode.upper()}. Vector database will not be modified.")
+
+    config_vars = await get_system_config()
+    for k, v in config_vars.items():
+        if v is not None:
+            os.environ[k] = str(v)
+
+    from backend.ingestion.artifacts import save_parse_artifacts
+    from backend.ingestion.models import ParsedDocument
+    from backend.ingestion.normalizers import LlmMarkdownNormalizer, NormalizationOptions
+    from backend.ingestion.processor import DocumentProcessor
+    from backend.ingestion.quality.gates import analyze_markdown
+
+    processor = DocumentProcessor()
+    target_files = []
+    for f_arg in args.files:
+        clean_path = f_arg.lstrip('@')
+        if not os.path.exists(clean_path):
+            alt_path = os.path.join("upload_docs", clean_path)
+            if os.path.exists(alt_path):
+                clean_path = alt_path
+        matches = glob.glob(clean_path)
+        if matches:
+            target_files.extend(matches)
+        else:
+            print(f"   [WARN] Warning: File not found: {f_arg}")
+
+    if not target_files:
+        print("[ERR] Error: No valid files found to parse.")
+        return
+
+    print(f"{'FILE':<40} | {'PARSER':<14} | {'CHARS':<8} | {'OUTPUT'}")
+    print("-" * 95)
+    for file_path in target_files:
+        fname = os.path.basename(file_path)
+        normalized = file_path.replace("\\", "/").lower()
+        doc_type = "qna" if "/qna/" in normalized else "general"
+        try:
+            parsed = processor.parse_to_markdown(file_path, mode=mode, doc_type=doc_type)
+            raw_markdown = parsed.markdown
+            selected_parser = parsed.selected_parser
+            markdown = parsed.markdown
+            normalization_manifest = None
+            parser_outputs = dict(parsed.parser_outputs) if args.all_outputs else {parsed.selected_parser: parsed.markdown}
+            if args.llm_normalize:
+                normalization = LlmMarkdownNormalizer(NormalizationOptions(enabled=True)).normalize(
+                    markdown,
+                    filename=fname,
+                    doc_type=doc_type,
+                    parser=selected_parser,
+                )
+                markdown = normalization.markdown
+                normalization_manifest = normalization.manifest
+                parser_outputs["llm_normalized"] = markdown
+                if normalization.accepted:
+                    selected_parser = f"{selected_parser}_llm_normalized"
+            parsed_doc = ParsedDocument(
+                file_path=file_path,
+                filename=fname,
+                doc_type=doc_type,
+                markdown=markdown,
+                selected_parser=selected_parser,
+                diagnostics=analyze_markdown(markdown, parser=selected_parser, source_type=selected_parser),
+                parser_outputs=parser_outputs,
+                raw_markdown=raw_markdown if args.llm_normalize else None,
+                normalization_manifest=normalization_manifest,
+            )
+            out_path = save_parse_artifacts(parsed_doc, chunks=None, root=args.output_dir or "generated_doc_md")
+            print(f"{fname[:40]:<40} | {selected_parser:<14} | {len(markdown):<8} | {out_path}")
+        except Exception as e:
+            print(f"{fname[:40]:<40} | {'-':<14} | {'-':<8} | [ERR] {e!r}")
 
 async def cmd_list(args):
     from backend.rag.store import get_vector_store
@@ -399,15 +507,37 @@ def main():
     # Command: rebuild
     rebuild_parser = subparsers.add_parser("rebuild", help="Wipe database and re-index all documents from scratch")
     rebuild_parser.add_argument("--dry-run", action="store_true", help="Prepare chunks without indexing")
+    rebuild_parser.add_argument("--parser", choices=["auto", "vision_llm", "vision", "docling", "docling_vision", "pymupdf", "pymupdf4llm"], help="Parser backend to use")
+    rebuild_parser.add_argument("--vision", action="store_true", help="FORCE override: Use Ollama vision parser")
+    rebuild_parser.add_argument("--docling", action="store_true", help="FORCE override: Use Docling digital parser")
+    rebuild_parser.add_argument("--pymupdf", action="store_true", help="FORCE override: Use PyMuPDF parser")
     rebuild_parser.add_argument("--pymupdf4llm", action="store_true", help="FORCE override: Use PyMuPDF4LLM for all files")
     rebuild_parser.add_argument("--docling-vision", action="store_true", help="FORCE override: Use Docling Vision (OCR) for all files")
+    rebuild_parser.add_argument("--llm-normalize", action="store_true", help="Normalize parsed Markdown with the configured LLM before chunking/indexing")
     
     # Command: reindex
     reindex_parser = subparsers.add_parser("reindex", help="Selective re-indexing for specific files")
     reindex_parser.add_argument("files", nargs="+", help="One or more filenames or patterns (e.g. '@file.pdf')")
     reindex_parser.add_argument("--dry-run", action="store_true", help="Prepare chunks without indexing")
+    reindex_parser.add_argument("--parser", choices=["auto", "vision_llm", "vision", "docling", "docling_vision", "pymupdf", "pymupdf4llm"], help="Parser backend to use")
+    reindex_parser.add_argument("--vision", action="store_true", help="FORCE override: Use Ollama vision parser")
+    reindex_parser.add_argument("--docling", action="store_true", help="FORCE override: Use Docling digital parser")
+    reindex_parser.add_argument("--pymupdf", action="store_true", help="FORCE override: Use PyMuPDF parser")
     reindex_parser.add_argument("--pymupdf4llm", action="store_true", help="FORCE override: Use PyMuPDF4LLM for all files")
     reindex_parser.add_argument("--docling-vision", action="store_true", help="FORCE override: Use Docling Vision (OCR) for all files")
+    reindex_parser.add_argument("--llm-normalize", action="store_true", help="Normalize parsed Markdown with the configured LLM before chunking/indexing")
+
+    parse_parser = subparsers.add_parser("parse", help="Parse files to Markdown only; do not chunk or index")
+    parse_parser.add_argument("files", nargs="+", help="One or more files or patterns to parse")
+    parse_parser.add_argument("--parser", choices=["auto", "vision_llm", "vision", "docling", "docling_vision", "pymupdf", "pymupdf4llm"], default="auto", help="Parser backend to use")
+    parse_parser.add_argument("--output-dir", help="Directory for generated Markdown files")
+    parse_parser.add_argument("--all-outputs", action="store_true", help="Write every intermediate parser output when available")
+    parse_parser.add_argument("--vision", action="store_true", help="Use Ollama vision parser")
+    parse_parser.add_argument("--docling", action="store_true", help="Use Docling digital parser")
+    parse_parser.add_argument("--pymupdf", action="store_true", help="Use PyMuPDF parser")
+    parse_parser.add_argument("--pymupdf4llm", action="store_true", help="Use PyMuPDF4LLM parser")
+    parse_parser.add_argument("--docling-vision", action="store_true", help="Use Docling OCR parser")
+    parse_parser.add_argument("--llm-normalize", action="store_true", help="Normalize parsed Markdown with the configured LLM after parser extraction")
     
     # Command: list
     subparsers.add_parser("list", help="List all indexed files and metrics")
@@ -435,6 +565,8 @@ def main():
             asyncio.run(cmd_reindex(args))
         elif args.command == "list":
             asyncio.run(cmd_list(args))
+        elif args.command == "parse":
+            asyncio.run(cmd_parse(args))
         elif args.command == "probe":
             asyncio.run(cmd_probe(args))
         elif args.command == "delete":

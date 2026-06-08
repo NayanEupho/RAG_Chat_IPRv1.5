@@ -1,0 +1,32 @@
+{
+  "batch_id": 1,
+  "input_chars": 40814,
+  "output_chars": 34346,
+  "headings": [
+    "# Attention Is All You Need",
+    "## Abstract",
+    "## 1 Introduction",
+    "## 2 Background",
+    "## 3 Model Architecture",
+    "### 3.1 Encoder and Decoder Stacks",
+    "### 3.2 Attention",
+    "#### 3.2.1 Scaled Dot-Product Attention",
+    "#### 3.2.2 Multi-Head Attention",
+    "#### 3.2.3 Applications of Attention in our Model",
+    "### 3.3 Position-wise Feed-Forward Networks",
+    "### 3.4 Embeddings and Softmax",
+    "### 3.5 Positional Encoding",
+    "## 4 Why Self-Attention",
+    "## 5 Training",
+    "### 5.1 Training Data and Batching",
+    "### 5.2 Hardware and Schedule",
+    "### 5.3 Optimizer",
+    "### 5.4 Regularization",
+    "## 6 Results",
+    "### 6.1 Machine Translation",
+    "### 6.2 Model Variations",
+    "### 6.3 English Constituency Parsing",
+    "## 7 Conclusion"
+  ],
+  "warnings": []
+}

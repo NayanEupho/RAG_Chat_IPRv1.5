@@ -1,0 +1,41 @@
+{
+  "enabled": true,
+  "mode": "llm_markdown",
+  "status": "accepted",
+  "source_parser": "docling",
+  "doc_type": "general",
+  "model": "gemma4:31b-cloud",
+  "host": "http://localhost:11434",
+  "raw_char_count": 7533,
+  "normalized_char_count": 7929,
+  "raw_word_count": 1123,
+  "normalized_word_count": 1164,
+  "batch_count": 1,
+  "validation": {
+    "raw_word_count": 1123,
+    "normalized_word_count": 1164,
+    "word_retention_ratio": 1.037,
+    "errors": [],
+    "warnings": []
+  },
+  "batches": [
+    {
+      "batch_id": 1,
+      "input_chars": 7533,
+      "output_chars": 7929,
+      "headings": [
+        "# Design and Development of \"Institute for Plasma Research\" Website",
+        "## Table of Contents",
+        "## 1. Scope of the Work",
+        "### 1.1. Web Application",
+        "### 1.2. UI/UX Design",
+        "### 1.3. Security",
+        "### 1.4. Certificates and Audit",
+        "### 1.5. Requirement for Work Execution",
+        "## 2. Warranty Requirement",
+        "## 3. Acceptance and Deliverables"
+      ],
+      "warnings": []
+    }
+  ]
+}

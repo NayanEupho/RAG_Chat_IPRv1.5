@@ -1,0 +1,10 @@
+{
+  "file_path": "C:\\Users\\Nayan\\Desktop\\RAG_Chat_IPRv1.5\\upload_docs\\QnA\\FAQ_LTDP_28Dec11.pdf",
+  "filename": "FAQ_LTDP_28Dec11.pdf",
+  "doc_type": "qna",
+  "selected_parser": "pymupdf4llm_fallback",
+  "parser_outputs": [
+    "pymupdf4llm_fallback"
+  ],
+  "normalization": null
+}

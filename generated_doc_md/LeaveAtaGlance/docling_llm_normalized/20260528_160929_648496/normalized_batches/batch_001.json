@@ -1,0 +1,16 @@
+{
+  "batch_id": 1,
+  "input_chars": 25569,
+  "output_chars": 9488,
+  "headings": [
+    "# IPR Leave rules at glance",
+    "## Table of Contents",
+    "## General Rules",
+    "## Grant of Leave on Medical Grounds",
+    "## Overstayal and Absence",
+    "## Leave Types and Entitlements",
+    "## Special Leave Categories",
+    "## Study Leave"
+  ],
+  "warnings": []
+}

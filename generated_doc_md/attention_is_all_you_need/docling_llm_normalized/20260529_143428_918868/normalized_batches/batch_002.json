@@ -1,0 +1,14 @@
+{
+  "batch_id": 2,
+  "input_chars": 10710,
+  "output_chars": 10683,
+  "headings": [
+    "## 7 Conclusion",
+    "## References",
+    "## Attention Visualizations",
+    "### Input-Input Layer 5",
+    "### Input-Input Layer 5",
+    "### Input-Input Layer 5"
+  ],
+  "warnings": []
+}

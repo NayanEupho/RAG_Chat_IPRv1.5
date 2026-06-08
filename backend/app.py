@@ -34,7 +34,49 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"Main Model: {config.main_model.host} / {config.main_model.model_name}")
     logger.info(f"Embedding Model: {config.embedding_model.host} / {config.embedding_model.model_name}")
+    logger.info(f"Model Context Window: {config.model_context_window} tokens")
+    logger.info(f"RAG Workflow: {config.rag_workflow}")
+
+    # Auto-detect model capabilities (context window, thinking model)
+    try:
+        from backend.llm.detection import detect_model_capabilities
+        await detect_model_capabilities(config)
+    except Exception as e:
+        logger.warning(f"Model capability detection failed: {e}")
+    logger.info(f"Post-detection — Context Window: {config.model_context_window}, Is Thinking: {config.is_thinking_model}")
+
+    # Pre-warm the LLM model to avoid loading latency on first user query
+    try:
+        from backend.llm.client import OllamaClientWrapper
+        import time
+        warm_start = time.monotonic()
+        chat_model = OllamaClientWrapper.get_chat_model()
+        # Send a minimal request to force model load into GPU memory
+        dummy = await chat_model.ainvoke([
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Warmup"}
+        ])
+        warm_ms = int((time.monotonic() - warm_start) * 1000)
+        logger.info(f"Model pre-warmed in {warm_ms}ms (keep_alive=-1)")
+    except Exception as e:
+        logger.warning(f"Model pre-warm failed: {e}")
+
+    # Pre-warm Reranker to avoid cold-start latency on first query
+    try:
+        from backend.rag.reranker import Reranker
+        reranker = Reranker()
+        logger.info(f"Reranker pre-warmed: {reranker.model_name}")
+    except Exception as e:
+        logger.warning(f"Reranker pre-warm failed: {e}")
     
+    # Initialize history DB
+    try:
+        from backend.state.history import init_history_db
+        init_history_db()
+        logger.info("History DB initialized")
+    except Exception as e:
+        logger.warning(f"History DB init failed: {e}")
+
     # Start Watchdog
     global watchdog_service
     watchdog_service = WatchdogService(watch_dir="upload_docs")

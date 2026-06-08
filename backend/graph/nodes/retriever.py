@@ -16,12 +16,36 @@ from functools import lru_cache
 import hashlib
 import logging
 import asyncio
+import time
+import os
+import re
 from backend.config import get_config
 
 logger = logging.getLogger(__name__)
 
 # Global LRU-style cache for embeddings to reduce Ollama API load
 _embedding_cache = {}
+
+def _normalize_filename(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _resolve_target_filename(target: str, available_files: list[str]) -> str:
+    """Resolve GUI/LLM target strings to the exact filename stored in Chroma."""
+    if not target:
+        return target
+    target_norm = _normalize_filename(target)
+    for filename in available_files:
+        if filename == target:
+            return filename
+    for filename in available_files:
+        if _normalize_filename(filename) == target_norm:
+            return filename
+    for filename in available_files:
+        norm = _normalize_filename(filename)
+        if target_norm and (target_norm in norm or norm in target_norm):
+            return filename
+    return target
 
 async def get_cached_embedding(query: str, model: str) -> list:
     """Get embedding from cache or compute it."""
@@ -59,6 +83,14 @@ def smart_merge(text_a: str, text_b: str, max_overlap: int = 500) -> str:
     Expert implementation of Overlap De-duplication.
     Detects if the end of text_a matches the start of text_b and joins them cleanly.
     """
+    if "|" in text_a and "|" in text_b:
+        a_lines = text_a.splitlines()
+        b_lines = text_b.splitlines()
+        if len(a_lines) >= 2 and len(b_lines) >= 2:
+            header = "\n".join(a_lines[:2])
+            if "\n".join(b_lines[:2]) == header:
+                text_b = "\n".join(b_lines[2:]).lstrip()
+
     # 1. Exact match tail optimization
     # Ingestion uses ~400 char overlap. Let's look for common text.
     a_tail = text_a[-max_overlap:]
@@ -85,7 +117,17 @@ def stitch_fragments(docs: list[dict]) -> list[dict]:
     Uses part counts (fragment_index/total) for deterministic stitching.
     """
     if not docs: return []
-    
+
+    # Table-aware ingestion already emits atomic row chunks. Merging adjacent
+    # rows here can put an unrelated row at the front of the evidence envelope
+    # and degrade both grounding and TTFT.
+    table_docs = [
+        d for d in docs
+        if str(d.get("metadata", {}).get("chunk_kind", "")).startswith("table_row")
+    ]
+    if table_docs:
+        return docs
+     
     # Sort docs by filename and then by chunk_index to ensure order
     docs_sorted = sorted(docs, key=lambda x: (x['metadata'].get('filename', ''), x['metadata'].get('chunk_index', -1)))
     
@@ -230,170 +272,477 @@ async def generate_sub_queries(query: str) -> list[str]:
         logger.warning(f"[RETRIEVER] Query expansion failed: {e}. using original query only.")
         return [query]
 
-async def retrieve_documents(state: AgentState):
-    """
-    Retrieves documents based on intent.
-    - direct_rag: Search all unique docs.
-    - specific_doc_rag: Filter by list of filenames.
-    """
-    query = state['query']
-    intent = state['intent']
-    targeted_docs = state.get('targeted_docs', [])
-    
-    store = get_vector_store()
-    model = OllamaClientWrapper.get_embedding_model_name()
-    
-    # Decide on queries
-    queries_to_run = [query]
-    
-    # Use multi-query for BOTH general RAG and specific file targeting
-    # CHECK: If we already have semantic_queries (from Planner or Rewriter), we SKIP generation
-    semantic_maps = state.get('semantic_queries', [])
-    
+
+_TOKEN_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
+    "in", "is", "it", "me", "of", "on", "or", "that", "the", "this", "to",
+    "what", "when", "where", "which", "who", "why", "with", "about", "does",
+    "explain", "give", "show", "tell", "summarize", "summary",
+}
+
+
+def _query_variants(query: str, semantic_maps: list[dict], targeted_docs: list[str]) -> list[dict]:
+    """Deterministic query plan: no pre-retrieval LLM call."""
     if semantic_maps:
-        logger.info(f"[RETRIEVER] Using {len(semantic_maps)} pre-planned semantic queries.")
-        # We don't need to run generate_sub_queries here because we will iterate over semantic_maps later
-        # However, for the "Global Fallback" (Safety Net) below, we might still want a base list of strings.
-        queries_to_run = [s['query'] for s in semantic_maps]
-        
-    elif intent in ["direct_rag", "specific_doc_rag"]:
-        logger.info("[RETRIEVER] Generating sub-queries for better recall...")
-        expanded_queries = await generate_sub_queries(query)
-        queries_to_run = expanded_queries
-    
-    # Run Searches in Parallel
-    all_raw_docs = []
-    
-    # 1. ALWAYS fetch Introduction/Abstract for targeted docs (Chunks 0, 1, 2)
-    async def fetch_intro(doc_name):
-        try:
-            intro_where = {"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 3}}]}
-            intro_results = store.get_by_metadata(where=intro_where, limit=3)
-            if intro_results and intro_results.get('documents'):
-                return [{"page_content": c, "metadata": intro_results['metadatas'][i]} 
-                        for i, c in enumerate(intro_results['documents'])]
-        except Exception as e:
-            logger.warning(f"[RETRIEVER] Failed to fetch intro chunks: {e}")
-        return []
+        return [
+            {"query": (item.get("query") or query).strip(), "target": item.get("target")}
+            for item in semantic_maps
+            if (item.get("query") or query)
+        ]
 
-    # 2. SEGMENTED/GLOBAL SEARCH TASKS
-    async def run_scenario(q, target_file):
-        q_embed = await get_cached_embedding(q, model)
-        if not q_embed: return []
-        
-        filters = {"filename": target_file} if target_file else None
-        res = store.query(query_embeddings=q_embed, n_results=20 if target_file else 7, where=filters)
-        
-        results = []
-        if res['documents']:
-            for i, doc_list in enumerate(res['documents']):
-                metas = res['metadatas'][i]
-                for j, doc in enumerate(doc_list):
-                    meta = metas[j]
-                    
-                    # 1. Structural Penalty: De-prioritize "Empty" or "Structural" chunks
-                    # Simple heuristic: If it's mostly whitespace or very short and looks like a TOC
-                    if len(doc.strip()) < 100 or doc.count('\n') > len(doc) / 20: 
-                        # We still keep them but they might be filtered by reranker
-                        pass
+    base = re.sub(r"\s+", " ", query).strip()
+    words = _tokenize(base)
+    keyword = " ".join(words[:10])
+    variants = [base]
 
-                    results.append({"page_content": doc, "metadata": meta})
-        return results
-    
-    # EXECUTE ALL IN PARALLEL
-    tasks = [fetch_intro(d) for d in targeted_docs]
-    if semantic_maps:
-        for entry in semantic_maps:
-            tasks.append(run_scenario(entry.get('query'), entry.get('target')))
-        base_q = queries_to_run[0] if queries_to_run else state.get('query', '')
-        tasks.append(run_scenario(base_q, None)) # Global Fallback
-    else:
-        for q in queries_to_run:
-            tasks.append(run_scenario(q, targeted_docs[0] if targeted_docs else None))
+    lower = base.lower()
+    if any(t in lower for t in ["summary", "summarize", "overview", "about"]):
+        variants.append(f"{keyword or base} purpose scope overview conclusion")
+    elif any(t in lower for t in ["technology", "technologies", "stack", "component", "framework", "tool"]):
+        variants.append(f"{keyword or base} technology stack component breakdown tools frameworks runtime language")
+    elif any(t in lower for t in ["eligibility", "eligible", "criteria", "who can"]):
+        variants.append(f"{keyword or base} eligibility criteria conditions requirements")
+    elif any(t in lower for t in ["benefit", "allowance", "entitlement"]):
+        variants.append(f"{keyword or base} benefit entitlement allowance")
+    if keyword and keyword.lower() != base.lower():
+        variants.append(keyword)
 
-    results = await asyncio.gather(*tasks)
-    for batch in results:
-        all_raw_docs.extend(batch)
-    
-    # Deduplicate by Content
-    unique_docs_map = {}
-    for d in all_raw_docs:
-        key = d['page_content']
-        if key not in unique_docs_map:
-            unique_docs_map[key] = d
-            
-    unique_docs = list(unique_docs_map.values())
-    logger.info(f"[RETRIEVER] Found {len(unique_docs)} unique documents. Processing for rerank...")
+    deduped = []
+    seen = set()
+    for variant in variants:
+        key = variant.lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(variant.strip())
 
-    # 3. Rerank (now async - offloaded to ThreadPoolExecutor)
-    from backend.rag.reranker import Reranker
-    reranker = Reranker()
-    cfg = get_config()
-    ranked_docs = await reranker.rank(query, unique_docs, top_k=cfg.retrieval_top_k)
-    
-    logger.info(f"[RETRIEVER] Reranked to top {len(ranked_docs)} documents.")
+    targets = targeted_docs or [None]
+    # Keep the hot path bounded: max 2 variants per target.
+    return [{"query": v, "target": target} for target in targets for v in deduped[:2]]
 
-    # 4. [AUDIT REFINEMENT] Post-Rerank Neighbor Fetching (Optimization for Latency)
-    # We only fetch neighbors for the high-confidence results to save reranker time.
-    final_with_neighbors = []
-    for d in ranked_docs:
-        final_with_neighbors.append(d)
-        try:
-            meta = d['metadata']
-            chunk_idx = meta.get('chunk_index')
-            filename = meta.get('filename')
-            if chunk_idx is not None and filename is not None:
-                neighbor_where = {
-                    "$and": [
-                        {"filename": {"$eq": filename}},
-                        {"chunk_index": {"$in": [chunk_idx - 1, chunk_idx + 1]}}
-                    ]
-                }
-                neighbor_results = store.get_by_metadata(where=neighbor_where, limit=2)
-                if neighbor_results and neighbor_results.get('documents'):
-                    for n_idx, n_content in enumerate(neighbor_results['documents']):
-                        n_meta = neighbor_results['metadatas'][n_idx]
-                        final_with_neighbors.append({"page_content": n_content, "metadata": n_meta})
-        except Exception as neighbor_err:
-            logger.debug(f"[RETRIEVER] Failed to fetch neighbors: {neighbor_err}")
 
-    # Re-deduplicate after neighbor injection (neighbors might already be in list)
-    unique_final = {}
-    for d in final_with_neighbors:
-        unique_final[d['page_content']] = d
-    final_docs = list(unique_final.values())
+def _effective_top_k(query: str, context_action: str, cfg) -> int:
+    lower = (query or "").lower()
+    if context_action == "hybrid" or re.search(r"\b(full details|everything|compare|detailed lifecycle|all sections|deep)\b", lower):
+        return max(cfg.retrieval_top_k, getattr(cfg, "retrieval_deep_top_k", 10))
+    if re.search(r"\b(details|detail|explain|elaborate|why|how|exact)\b", lower):
+        return max(cfg.retrieval_top_k, getattr(cfg, "retrieval_detail_top_k", 8))
+    return max(1, cfg.retrieval_top_k)
 
-    # Stitch hierarchical fragments (for general docs)
-    # Note: We stitch FROM the unique_final list which includes neighbors
-    final_docs = stitch_fragments(list(unique_final.values()))
-    
-    # Stitch Q&A fragments (groups by qa_pair_id)
-    final_docs = stitch_qna_fragments(final_docs)
 
-    # Format Final Results (ULTRA-MINIFIED ENVELOPE)
-    import re
+def _tokenize(text: str) -> list[str]:
+    return [
+        token for token in re.findall(r"[a-z0-9][a-z0-9&./-]*", text.lower())
+        if len(token) > 2 and token not in _TOKEN_STOPWORDS
+    ]
+
+
+def _hybrid_score(query: str, doc: dict) -> float:
+    """Cheap lexical and structural scoring layered on Chroma distance rank."""
+    text = doc.get("page_content", "")
+    meta = doc.get("metadata", {})
+    q_tokens = set(_tokenize(query))
+    if not q_tokens:
+        return doc.get("_vector_score", 0.0)
+
+    haystack = " ".join([
+        text,
+        str(meta.get("section_title", "")),
+        str(meta.get("section_path", "")),
+        str(meta.get("filename", "")),
+        str(meta.get("question_text", "")),
+    ]).lower()
+    matched = sum(1 for token in q_tokens if token in haystack)
+    coverage = matched / max(len(q_tokens), 1)
+    title_text = f"{meta.get('section_title', '')} {meta.get('section_path', '')}".lower()
+    title_hits = sum(1 for token in q_tokens if token in title_text)
+    query_acronyms = {
+        token.lower()
+        for token in re.findall(r"\b[A-Z][A-Z0-9&/-]{1,7}\b", query)
+    }
+    exact_acronym_hits = sum(
+        1
+        for token in query_acronyms
+        if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", title_text)
+    )
+    qna_boost = 0.08 if meta.get("doc_type") == "qna" and matched else 0.0
+    table_kind = str(meta.get("chunk_kind", ""))
+    table_boost = 0.18 if table_kind.startswith("table_row") and matched else 0.0
+    table_penalty = -0.04 if meta.get("has_table") and matched == 0 else 0.0
+    technology_boost = 0.0
+    if any(token in q_tokens for token in {"technology", "technologies", "stack", "component", "framework", "tool"}):
+        if "component breakdown" in title_text or re.search(r"\bcomponent:\s+", haystack):
+            technology_boost = 0.42
+    return (
+        doc.get("_vector_score", 0.0)
+        + (coverage * 0.45)
+        + (title_hits * 0.06)
+        + (exact_acronym_hits * 0.22)
+        + qna_boost
+        + table_boost
+        + table_penalty
+        + technology_boost
+    )
+
+
+def _apply_source_precision(query: str, docs: list[dict], top_k: int) -> list[dict]:
+    """
+    Reduce source contamination after hybrid ranking.
+
+    If table-row chunks from one file are clearly relevant, prioritize that
+    table source envelope. This is intentionally metadata/score driven rather
+    than hard-coded to a specific document.
+    """
+    if not docs:
+        return docs
+    q_tokens = set(_tokenize(query))
+    if not q_tokens:
+        return docs
+
+    table_docs = [
+        d for d in docs
+        if str(d.get("metadata", {}).get("chunk_kind", "")).startswith("table_row")
+        and _hybrid_score(query, d) >= 0.65
+    ]
+    if not table_docs:
+        return docs
+
+    by_file: dict[str, list[dict]] = defaultdict(list)
+    for doc in table_docs:
+        by_file[doc.get("metadata", {}).get("filename", "")].append(doc)
+
+    dominant_file, dominant_docs = max(
+        by_file.items(),
+        key=lambda item: (len(item[1]), max(d.get("_score", 0.0) for d in item[1])),
+    )
+    if not dominant_file:
+        return docs
+
+    dominant_best = max(d.get("_score", 0.0) for d in dominant_docs)
+    dominant_ranked = [d for d in docs if d.get("metadata", {}).get("filename") == dominant_file]
+    other_ranked = [
+        d for d in docs
+        if d.get("metadata", {}).get("filename") != dominant_file
+        and d.get("_score", 0.0) >= dominant_best - 0.08
+    ]
+
+    if len(dominant_ranked) >= min(2, top_k):
+        return (dominant_ranked + other_ranked)[:max(top_k, len(dominant_ranked[:top_k]))]
+    return docs
+
+
+def _dedupe_docs(docs: list[dict]) -> list[dict]:
+    seen = set()
+    deduped = []
+    for doc in docs:
+        meta = doc.get("metadata", {})
+        key = (
+            meta.get("doc_id") or meta.get("source") or meta.get("filename"),
+            meta.get("chunk_index"),
+            doc.get("page_content", "")[:160],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(doc)
+    return deduped
+
+
+def _format_retrieved_docs(final_docs: list[dict]) -> list[str]:
     final_retrieved = []
-    
     for d in final_docs:
         meta = d['metadata']
         filename = meta.get('filename', 'Unknown')
         path = meta.get('section_path', 'Root')
+        title = meta.get('section_title') or path.split(" > ")[-1]
         raw_content = d['page_content']
         doc_type = meta.get('doc_type', 'general')
-        
-        # Minify path for prompt space
-        short_path = path.split(" > ")[-1] if " > " in path else path
-        
-        # Clean the "glued" prefix added during ingestion
-        content = re.sub(r'^\[Doc: .*? \| (?:Path|Section): .*?\](?:\n| \| Q&A: .*?\](?:\n| \| Part \d+/\d+\]))', '', raw_content)
-        
-        if doc_type == "qna":
-            header = f"[Q&A | Source: {filename} | Section: {short_path}]"
-            structured_segment = f"{header}\n{content}"
+        content = re.sub(
+            r'^\[Doc: .*? \| (?:Path|Section): .*?\](?:\n# .+?\n|\n)?',
+            '',
+            raw_content,
+            count=1,
+            flags=re.S,
+        ).strip()
+
+        chunk_kind = meta.get("chunk_kind", "qna" if doc_type == "qna" else "section")
+        heading_level = meta.get("heading_level", meta.get("header_level", ""))
+        chunk_index = meta.get("chunk_index", "")
+        prev_index = meta.get("prev_index", -1)
+        next_index = meta.get("next_index", -1)
+        normalized = str(bool(meta.get("normalized", False))).lower()
+        parser = meta.get("parser", "unknown")
+
+        header_lines = [
+            f"[Source: {filename}]",
+            f"[DocType: {doc_type}]",
+            f"[Parser: {parser}]",
+            f"[ChunkKind: {chunk_kind}]",
+            f"[Section: {title}]",
+            f"[SectionPath: {path}]",
+            f"[HeadingLevel: {heading_level}]",
+            f"[ChunkIndex: {chunk_index}]",
+            f"[Neighbors: prev={prev_index} next={next_index}]",
+            f"[Normalized: {normalized}]",
+        ]
+        if meta.get("table_title"):
+            header_lines.append(f"[TableTitle: {meta.get('table_title')}]")
+        if meta.get("row_title"):
+            header_lines.append(f"[RowTitle: {meta.get('row_title')}]")
+        if doc_type == "qna" and meta.get("qa_pair_id"):
+            header_lines.append(f"[QAPairID: {meta.get('qa_pair_id')}]")
+        final_retrieved.append(f"{chr(10).join(header_lines)}\n\n{content}")
+    return final_retrieved
+
+async def retrieve_documents(state: AgentState):
+    """Low-latency hybrid retrieval with bounded candidate work."""
+    query = state['query']
+    requested_targets = state.get('targeted_docs', []) or []
+    context_action = state.get("context_action", "retrieve")
+    previous_docs = state.get("documents", []) if context_action == "hybrid" else []
+    retrieval_start = time.monotonic()
+
+    if context_action == "answer_from_existing" and state.get("documents"):
+        return {
+            "documents": state.get("documents", []),
+            "targeted_docs": requested_targets,
+            "retrieval_metrics": {
+                "skipped": True,
+                "reason": "answer_from_existing",
+                "total_ms": 0,
+            },
+        }
+
+    store = get_vector_store()
+    available_files = store.get_all_files() if requested_targets else []
+    targeted_docs = [_resolve_target_filename(doc, available_files) for doc in requested_targets]
+    model = OllamaClientWrapper.get_embedding_model_name()
+    cfg = get_config()
+    top_k = _effective_top_k(query, context_action, cfg)
+    has_targets = bool(targeted_docs)
+    query_plan = _query_variants(query, state.get('semantic_queries', []), targeted_docs)
+    if available_files:
+        query_plan = [
+            {**plan, "target": _resolve_target_filename(plan.get("target"), available_files) if plan.get("target") else None}
+            for plan in query_plan
+        ]
+    metrics = {
+        "targeted_docs_requested": requested_targets,
+        "targeted_docs_resolved": targeted_docs,
+        "query_plan_count": len(query_plan),
+        "embedding_ms": 0,
+        "vector_ms": 0,
+        "fallback_used": False,
+        "candidate_count": 0,
+        "ranked_count": 0,
+        "adjacent_context_count": 0,
+        "reason": None,
+    }
+
+    per_query = min(12 if has_targets else 18, max(top_k * (2 if has_targets else 3), top_k + 4))
+    pool_limit = min(36 if has_targets else 56, per_query * max(1, len(query_plan)))
+
+    async def fetch_intro(doc_name: str):
+        if not any(term in query.lower() for term in ["about", "overview", "purpose", "scope", "summarize", "summary"]):
+            return []
+        try:
+            intro_where = {"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 2}}]}
+            intro_results = store.get_by_metadata(where=intro_where, limit=2)
+            return [
+                {"page_content": c, "metadata": intro_results['metadatas'][i], "_vector_score": 0.35}
+                for i, c in enumerate(intro_results.get('documents') or [])
+            ]
+        except Exception as e:
+            logger.debug(f"[RETRIEVER] Intro fetch skipped: {e}")
+            return []
+
+    async def fetch_target_fallback(doc_name: str):
+        """Guarantee targeted files contribute context when vector scores are weak."""
+        docs = []
+        try:
+            summary_results = store.get_by_metadata(
+                where={"$and": [{"filename": {"$eq": doc_name}}, {"chunk_kind": {"$eq": "doc_summary"}}]},
+                limit=1,
+            )
+            docs.extend([
+                {"page_content": c, "metadata": summary_results['metadatas'][i], "_vector_score": 0.30}
+                for i, c in enumerate(summary_results.get('documents') or [])
+            ])
+        except Exception as e:
+            logger.debug(f"[RETRIEVER] Summary fallback skipped for {doc_name}: {e}")
+
+        try:
+            intro_results = store.get_by_metadata(
+                where={"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 3}}]},
+                limit=3,
+            )
+            docs.extend([
+                {"page_content": c, "metadata": intro_results['metadatas'][i], "_vector_score": 0.25}
+                for i, c in enumerate(intro_results.get('documents') or [])
+            ])
+        except Exception as e:
+            logger.debug(f"[RETRIEVER] Intro fallback skipped for {doc_name}: {e}")
+
+        return docs
+
+    async def run_vector_query(plan: dict):
+        q = plan.get("query") or query
+        target_file = plan.get("target")
+        q_embed = state.get("query_embedding") if q == query else None
+        if not q_embed:
+            emb_start = time.monotonic()
+            q_embed = await get_cached_embedding(q, model)
+            metrics["embedding_ms"] += int((time.monotonic() - emb_start) * 1000)
+        if not q_embed:
+            return []
+        filters = {"filename": target_file} if target_file else None
+        vec_start = time.monotonic()
+        res = store.query(query_embeddings=q_embed, n_results=per_query, where=filters)
+        metrics["vector_ms"] += int((time.monotonic() - vec_start) * 1000)
+        docs = []
+        for doc_list, metas, distances in zip(
+            res.get('documents') or [],
+            res.get('metadatas') or [],
+            res.get('distances') or [],
+        ):
+            for doc_text, meta, distance in zip(doc_list, metas, distances):
+                if len((doc_text or "").strip()) < 40:
+                    continue
+                docs.append({
+                    "page_content": doc_text,
+                    "metadata": meta,
+                    "_vector_score": max(0.0, 1.0 - float(distance)),
+                    "_query": q,
+                })
+        return docs
+
+    async def fetch_adjacent_context(docs: list[dict]) -> list[dict]:
+        """Pull immediate neighbors for strong targeted hits with thin/parent context."""
+        if not has_targets or not docs:
+            return []
+        adjacent = []
+        seen = {
+            (
+                d.get("metadata", {}).get("filename"),
+                d.get("metadata", {}).get("chunk_index"),
+            )
+            for d in docs
+        }
+        for doc in docs[:top_k]:
+            meta = doc.get("metadata", {})
+            filename = meta.get("filename")
+            if not filename:
+                continue
+            text = doc.get("page_content", "")
+            title_path = f"{meta.get('section_title', '')} {meta.get('section_path', '')}".lower()
+            should_expand = (
+                len(text) < 1200
+                or any(term in title_path for term in ["overview", "stack", "architecture", "introduction"])
+            )
+            if not should_expand:
+                continue
+            neighbor_indices = []
+            for key in ("prev_index", "next_index"):
+                idx = meta.get(key)
+                if isinstance(idx, int) and idx >= 0:
+                    neighbor_indices.append(idx)
+            for idx in neighbor_indices:
+                key = (filename, idx)
+                if key in seen:
+                    continue
+                try:
+                    result = store.get_by_metadata(
+                        where={"$and": [{"filename": {"$eq": filename}}, {"chunk_index": {"$eq": idx}}]},
+                        limit=1,
+                    )
+                except Exception as e:
+                    logger.debug(f"[RETRIEVER] Adjacent context fetch skipped for {filename}#{idx}: {e}")
+                    continue
+                docs_found = result.get("documents") or []
+                metas_found = result.get("metadatas") or []
+                for content, adjacent_meta in zip(docs_found, metas_found):
+                    if len((content or "").strip()) < 40:
+                        continue
+                    seen.add(key)
+                    adjacent.append({
+                        "page_content": content,
+                        "metadata": adjacent_meta,
+                        "_vector_score": max(0.0, doc.get("_vector_score", 0.0) - 0.06),
+                        "_query": doc.get("_query", query),
+                    })
+        return adjacent
+
+    tasks = [run_vector_query(plan) for plan in query_plan]
+    if targeted_docs:
+        tasks.extend(fetch_intro(doc) for doc in targeted_docs)
+
+    batches = await asyncio.gather(*tasks)
+    candidates = _dedupe_docs([doc for batch in batches for doc in batch])
+    for doc in candidates:
+        doc["_score"] = _hybrid_score(query, doc)
+    candidates.sort(key=lambda d: d.get("_score", 0.0), reverse=True)
+    min_score = float(os.getenv("RAG_HYBRID_MIN_SCORE_TARGETED" if has_targets else "RAG_HYBRID_MIN_SCORE", "0.20" if has_targets else "0.42"))
+    if candidates and candidates[0].get("_score", 0.0) < min_score:
+        logger.info(f"[RETRIEVER] No strong evidence: best hybrid score {candidates[0].get('_score', 0.0):.3f} < {min_score}")
+        if has_targets:
+            candidates = candidates[:top_k]
+            metrics["reason"] = "targeted_low_score_kept"
         else:
-            header = f"[Source: {filename} | Section: {short_path}]"
-            structured_segment = f"{header}\n{content}"
-        
-        final_retrieved.append(structured_segment)
-                  
-    return {"documents": final_retrieved}
+            candidates = []
+            metrics["reason"] = "low_score_filtered"
+
+    if has_targets and not candidates:
+        fallback_batches = await asyncio.gather(*(fetch_target_fallback(doc) for doc in targeted_docs))
+        candidates = _dedupe_docs([doc for batch in fallback_batches for doc in batch])
+        for doc in candidates:
+            doc["_score"] = _hybrid_score(query, doc)
+        candidates.sort(key=lambda d: d.get("_score", 0.0), reverse=True)
+        metrics["fallback_used"] = True
+        metrics["reason"] = "targeted_fallback"
+
+    metrics["candidate_count"] = len(candidates)
+    candidates = candidates[:pool_limit]
+
+    search_ms = int((time.monotonic() - retrieval_start) * 1000)
+    logger.info(f"[RETRIEVER] Hybrid search produced {len(candidates)} candidates in {search_ms}ms.")
+
+    if os.getenv("RAG_USE_RERANKER", "false").lower() == "true" and candidates:
+        from backend.rag.reranker import Reranker
+        rerank_cap = min(int(os.getenv("RAG_RERANK_CAP", "12")), len(candidates))
+        rerank_start = time.monotonic()
+        ranked_docs = await Reranker().rank(query, candidates[:rerank_cap], top_k=top_k)
+        rerank_ms = int((time.monotonic() - rerank_start) * 1000)
+        logger.info(f"[RETRIEVER] Cross-encoder reranked {rerank_cap} docs in {rerank_ms}ms.")
+    else:
+        ranked_docs = candidates[:top_k]
+    adjacent_docs = await fetch_adjacent_context(ranked_docs)
+    if adjacent_docs:
+        for doc in adjacent_docs:
+            doc["_score"] = _hybrid_score(query, doc)
+        ranked_docs = _dedupe_docs(ranked_docs + adjacent_docs)
+        ranked_docs.sort(key=lambda d: d.get("_score", 0.0), reverse=True)
+        metrics["adjacent_context_count"] = len(adjacent_docs)
+        ranked_docs = ranked_docs[:top_k]
+    ranked_docs = _apply_source_precision(query, ranked_docs, top_k)
+    metrics["ranked_count"] = len(ranked_docs)
+
+    final_docs = stitch_fragments(ranked_docs)
+    final_docs = stitch_qna_fragments(final_docs)
+    total_ms = int((time.monotonic() - retrieval_start) * 1000)
+    metrics["total_ms"] = total_ms
+    logger.info(f"[RETRIEVER] Retrieval complete in {total_ms}ms.")
+    formatted_docs = _format_retrieved_docs(final_docs[:top_k])
+    if previous_docs:
+        combined = []
+        seen = set()
+        for doc in previous_docs + formatted_docs:
+            key = re.sub(r"\s+", " ", doc or "").strip()[:500]
+            if key and key not in seen:
+                seen.add(key)
+                combined.append(doc)
+        formatted_docs = combined[: max(top_k, len(previous_docs))]
+
+    return {
+        "documents": formatted_docs,
+        "targeted_docs": targeted_docs,
+        "retrieval_metrics": metrics,
+    }

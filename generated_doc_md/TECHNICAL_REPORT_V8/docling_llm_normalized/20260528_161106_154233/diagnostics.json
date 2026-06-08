@@ -1,0 +1,13 @@
+{
+  "parser": "docling_llm_normalized",
+  "source_type": "docling_llm_normalized",
+  "fallback_reason": null,
+  "page_count": 0,
+  "char_count": 25670,
+  "word_count": 3681,
+  "table_count": 8,
+  "table_row_count": 57,
+  "broken_table_score": 0.14,
+  "empty": false,
+  "warnings": []
+}

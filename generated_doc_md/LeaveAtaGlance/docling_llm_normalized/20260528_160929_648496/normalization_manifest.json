@@ -1,0 +1,39 @@
+{
+  "enabled": true,
+  "mode": "llm_markdown",
+  "status": "accepted",
+  "source_parser": "docling",
+  "doc_type": "general",
+  "model": "gemma4:31b-cloud",
+  "host": "http://localhost:11434",
+  "raw_char_count": 25569,
+  "normalized_char_count": 9488,
+  "raw_word_count": 1544,
+  "normalized_word_count": 1602,
+  "batch_count": 1,
+  "validation": {
+    "raw_word_count": 1544,
+    "normalized_word_count": 1602,
+    "word_retention_ratio": 1.038,
+    "errors": [],
+    "warnings": []
+  },
+  "batches": [
+    {
+      "batch_id": 1,
+      "input_chars": 25569,
+      "output_chars": 9488,
+      "headings": [
+        "# IPR Leave rules at glance",
+        "## Table of Contents",
+        "## General Rules",
+        "## Grant of Leave on Medical Grounds",
+        "## Overstayal and Absence",
+        "## Leave Types and Entitlements",
+        "## Special Leave Categories",
+        "## Study Leave"
+      ],
+      "warnings": []
+    }
+  ]
+}
