@@ -139,6 +139,13 @@ class VectorStore:
             self._files_cache = None
         logger.info(f"[STORE] Deleted all embeddings for file: {filename}")
 
+    def delete_document(self, document_id: str):
+        """Remove all chunks associated with an admin dashboard document id."""
+        with self.lock:
+            self.collection.delete(where={"document_id": document_id})
+            self._files_cache = None
+        logger.info(f"[STORE] Deleted all embeddings for document_id: {document_id}")
+
     def clear_all(self):
         """Wipes the entire collection for a complete system reset."""
         with self.lock:

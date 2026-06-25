@@ -77,6 +77,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"History DB init failed: {e}")
 
+    # Initialize isolated admin dashboard storage and local worker.
+    try:
+        from backend.admin.db import init_admin_db
+        from backend.admin.worker import admin_worker
+        init_admin_db()
+        admin_worker.start()
+        logger.info("Admin dashboard DB initialized")
+    except Exception as e:
+        logger.warning(f"Admin dashboard init failed: {e}")
+
     # Start Watchdog
     global watchdog_service
     watchdog_service = WatchdogService(watch_dir="upload_docs")
@@ -87,6 +97,11 @@ async def lifespan(app: FastAPI):
     # Cleanup
     if watchdog_service:
         watchdog_service.stop()
+    try:
+        from backend.admin.worker import admin_worker
+        admin_worker.stop()
+    except Exception as e:
+        logger.warning(f"Admin dashboard worker shutdown failed: {e}")
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -102,6 +117,9 @@ app.add_middleware(
 
 from backend.api.routes import router as api_router
 app.include_router(api_router, prefix="/api")
+
+from backend.admin.router import router as admin_router
+app.include_router(admin_router, prefix="/api/v1")
 
 from backend.saml.routes import router as saml_router
 app.include_router(saml_router, prefix="/saml")

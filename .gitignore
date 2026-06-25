@@ -50,6 +50,7 @@ generated_docs_md/*
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 frontend/.next/
 frontend/node_modules/
 frontend/out/
@@ -74,6 +75,7 @@ Thumbs.db
 .env.sample
 
 # Project Specific Clutter
+admin_data/
 inspect_output.txt
 rag_output.txt
 rag_debug_out.txt
