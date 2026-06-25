@@ -45,9 +45,9 @@ export default function MonitoringPage() {
       </div>
 
       <div className="grid cols-4">
-        <div className="stat"><span className="muted">Batches</span><strong>{stats.data?.batches ?? "-"}</strong></div>
-        <div className="stat"><span className="muted">Documents</span><strong>{stats.data?.documents ?? "-"}</strong></div>
-        <div className="stat"><span className="muted">Indexed</span><strong>{stats.data?.indexed_documents ?? "-"}</strong></div>
+        <div className="stat"><span className="muted">Source Files</span><strong>{stats.data?.filesystem?.source_files ?? "-"}</strong></div>
+        <div className="stat"><span className="muted">Artifact Runs</span><strong>{stats.data?.filesystem?.artifact_runs ?? "-"}</strong></div>
+        <div className="stat"><span className="muted">Dashboard Docs</span><strong>{stats.data?.documents ?? "-"}</strong></div>
         <div className="stat"><span className="muted">Failed Jobs</span><strong>{stats.data?.failed_jobs ?? "-"}</strong></div>
       </div>
 

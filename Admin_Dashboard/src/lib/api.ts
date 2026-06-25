@@ -6,7 +6,9 @@ import type {
   JobLog,
   LlmEndpoint,
   NotificationItem,
-  PageResult
+  PageResult,
+  RuntimeConfig,
+  WarehouseInventory
 } from "./types";
 
 interface ApiEnvelope<T> {
@@ -35,7 +37,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const adminApi = {
   stats: () => request<AdminStats>("/stats"),
+  runtimeConfig: () => request<RuntimeConfig>("/runtime-config"),
   vectorStats: () => request<AdminStats>("/vector/stats"),
+  warehouseInventory: () => request<WarehouseInventory>("/warehouse/inventory?limit=500"),
   batches: () => request<PageResult<Batch>>("/batches?limit=50"),
   batch: (batchId: string) => request<Batch>(`/batches/${encodeURIComponent(batchId)}`),
   submitBatch: (batchId: string) =>

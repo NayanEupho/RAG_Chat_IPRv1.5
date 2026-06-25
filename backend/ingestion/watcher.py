@@ -30,6 +30,13 @@ class NewDocumentHandler(FileSystemEventHandler):
         """Filter out directories, temporary files, and hidden files."""
         if os.path.isdir(path):
             return False
+
+        try:
+            relative = os.path.relpath(os.path.abspath(path), os.path.abspath("upload_docs"))
+            if relative.split(os.sep, 1)[0].lower() == "admin_dashboard":
+                return False
+        except ValueError:
+            pass
             
         filename = os.path.basename(path)
         # Skip hidden files, MS Office temp files, and common temp extensions

@@ -9,6 +9,7 @@ from typing import BinaryIO
 from fastapi import HTTPException, UploadFile
 
 from backend.admin.db import admin_data_dir
+from backend.admin.inventory import ADMIN_FOLDER, GENERATED_ROOT, SOURCE_ROOT
 from backend.admin.repository import new_id
 
 
@@ -22,7 +23,13 @@ def safe_name(name: str) -> str:
 
 
 def files_root() -> Path:
-    root = admin_data_dir() / "files"
+    root = SOURCE_ROOT / ADMIN_FOLDER
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def generated_root() -> Path:
+    root = GENERATED_ROOT / ADMIN_FOLDER
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -35,9 +42,9 @@ def document_root(batch_id: str, document_id: str) -> Path:
 
 def ensure_inside_admin_data(path: str | Path) -> Path:
     resolved = Path(path).resolve()
-    root = admin_data_dir().resolve()
-    if root != resolved and root not in resolved.parents:
-        raise HTTPException(status_code=403, detail="Path is outside admin storage")
+    roots = [admin_data_dir().resolve(), SOURCE_ROOT.resolve(), GENERATED_ROOT.resolve()]
+    if not any(root == resolved or root in resolved.parents for root in roots):
+        raise HTTPException(status_code=403, detail="Path is outside allowed project storage")
     return resolved
 
 
@@ -74,19 +81,19 @@ async def save_source_upload(batch_id: str, upload: UploadFile, config: dict) ->
 
 
 def variant_dir(batch_id: str, document_id: str, variant_id: str) -> Path:
-    target = document_root(batch_id, document_id) / "variants" / variant_id
+    target = generated_root() / "batches" / batch_id / "documents" / document_id / "variants" / variant_id
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
 def normalization_dir(batch_id: str, document_id: str, norm_variant_id: str) -> Path:
-    target = document_root(batch_id, document_id) / "normalizations" / norm_variant_id
+    target = generated_root() / "batches" / batch_id / "documents" / document_id / "normalizations" / norm_variant_id
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
 def review_dir(batch_id: str, document_id: str) -> Path:
-    target = document_root(batch_id, document_id) / "review"
+    target = generated_root() / "batches" / batch_id / "documents" / document_id / "review"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -132,4 +139,3 @@ def delete_tree(path: str | Path) -> None:
     target = ensure_inside_admin_data(path)
     if target.exists():
         shutil.rmtree(target)
-

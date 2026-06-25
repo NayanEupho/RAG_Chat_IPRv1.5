@@ -190,6 +190,7 @@ export interface AdminStats {
   healthy?: boolean;
   chroma_count?: number | null;
   error?: string;
+  filesystem?: InventorySummary;
 }
 
 export interface LlmEndpoint {
@@ -209,4 +210,65 @@ export interface AdminEvent {
   document_id?: string;
   status?: string;
   message?: string;
+}
+
+export interface RuntimeConfig {
+  normalization: {
+    enabled: boolean;
+    model_id: string | null;
+    endpoint: string | null;
+    display_name: string;
+  };
+  embedding: {
+    model_id: string | null;
+    endpoint: string | null;
+    display_name: string;
+  };
+  parsing_mode: string;
+  vision: {
+    model_id: string | null;
+    endpoint: string | null;
+  };
+}
+
+export interface InventorySummary {
+  source_files: number;
+  generated_files: number;
+  artifact_runs: number;
+  pdf_files: number;
+  markdown_files: number;
+  chunk_files: number;
+}
+
+export interface InventoryFile {
+  id: string;
+  kind: "source" | "generated";
+  filename: string;
+  relative_path: string;
+  path: string;
+  extension: string;
+  size_bytes: number;
+  modified_at: number;
+}
+
+export interface ArtifactRun {
+  id: string;
+  kind: "artifact_run";
+  document_name: string;
+  parser: string;
+  relative_path: string;
+  path: string;
+  modified_at: number;
+  files: Record<string, string>;
+  manifest: Record<string, unknown>;
+  has_chunks: boolean;
+  has_normalized: boolean;
+  has_selected: boolean;
+}
+
+export interface WarehouseInventory {
+  source_files: InventoryFile[];
+  generated_files: InventoryFile[];
+  artifact_runs: ArtifactRun[];
+  summary: InventorySummary;
 }

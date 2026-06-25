@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.admin import files
 from backend.admin.events import event_hub
+from backend.admin.inventory import inventory_summary, iter_generated_chunks, list_artifact_runs, list_generated_files, list_source_files
 from backend.admin.repository import new_id, repo
 from backend.admin.schemas import (
     ApproveReviewRequest,
@@ -41,7 +42,34 @@ def model_dict(model) -> dict:
 
 @router.get("/stats")
 def stats():
-    return ok(repo.get_stats())
+    return ok({**repo.get_stats(), "filesystem": inventory_summary()})
+
+
+@router.get("/runtime-config")
+def runtime_config():
+    from backend.config import get_config
+
+    cfg = get_config()
+    return ok(
+        {
+            "normalization": {
+                "enabled": cfg.ingest_llm_normalize,
+                "model_id": cfg.main_model.model_name if cfg.main_model else None,
+                "endpoint": cfg.main_model.host if cfg.main_model else None,
+                "display_name": cfg.main_model.model_name if cfg.main_model else "Not configured",
+            },
+            "embedding": {
+                "model_id": cfg.embedding_model.model_name if cfg.embedding_model else None,
+                "endpoint": cfg.embedding_model.host if cfg.embedding_model else None,
+                "display_name": cfg.embedding_model.model_name if cfg.embedding_model else "Not configured",
+            },
+            "parsing_mode": cfg.parsing_mode,
+            "vision": {
+                "model_id": cfg.vlm_model,
+                "endpoint": cfg.vlm_host,
+            },
+        }
+    )
 
 
 @router.post("/batches")
@@ -118,6 +146,18 @@ def delete_batch(batch_id: str):
 @router.get("/documents")
 def list_documents(status: Optional[str] = None, page: int = 1, limit: int = 100, search: Optional[str] = None):
     return ok(repo.list_documents(status=status, search=search, page=page, limit=limit))
+
+
+@router.get("/warehouse/inventory")
+def warehouse_inventory(limit: int = 500):
+    return ok(
+        {
+            "source_files": list_source_files(limit=limit),
+            "generated_files": list_generated_files(limit=limit),
+            "artifact_runs": list_artifact_runs(limit=limit),
+            "summary": inventory_summary(),
+        }
+    )
 
 
 @router.get("/documents/{document_id}")
@@ -265,7 +305,14 @@ def retry_chunking(document_id: str):
 
 @router.get("/chunks")
 def list_chunks(document_id: Optional[str] = None, batch_id: Optional[str] = None, search: Optional[str] = None, page: int = 1, limit: int = 25):
-    return ok(repo.list_chunks(document_id=document_id, batch_id=batch_id, search=search, page=page, limit=limit))
+    sqlite_page = repo.list_chunks(document_id=document_id, batch_id=batch_id, search=search, page=page, limit=limit)
+    if page == 1 and not document_id and not batch_id:
+        generated = iter_generated_chunks(limit=limit)
+        if search:
+            generated = [item for item in generated if search.lower() in item["content"].lower()]
+        combined = sqlite_page["items"] + generated[: max(limit - len(sqlite_page["items"]), 0)]
+        return ok({"items": combined, "total": sqlite_page["total"] + len(generated), "page": page})
+    return ok(sqlite_page)
 
 
 @router.get("/chunks/{chunk_id}")
@@ -330,8 +377,8 @@ def vector_stats():
         chroma_count = get_vector_store().count()
     except Exception as exc:
         chroma_count = None
-        return ok({"healthy": False, "error": str(exc), **repo.get_stats()})
-    return ok({"healthy": True, "chroma_count": chroma_count, **repo.get_stats()})
+        return ok({"healthy": False, "error": str(exc), **repo.get_stats(), "filesystem": inventory_summary()})
+    return ok({"healthy": True, "chroma_count": chroma_count, **repo.get_stats(), "filesystem": inventory_summary()})
 
 
 @router.get("/events")
@@ -351,4 +398,3 @@ async def events():
             event_hub.unsubscribe(subscriber)
 
     return StreamingResponse(generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-

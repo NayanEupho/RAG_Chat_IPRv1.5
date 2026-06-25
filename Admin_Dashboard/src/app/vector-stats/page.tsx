@@ -18,11 +18,32 @@ export default function VectorStatsPage() {
       <div className="grid cols-4">
         <div className="stat"><span className="muted">Chroma Count</span><strong>{stats.data?.chroma_count ?? "-"}</strong></div>
         <div className="stat"><span className="muted">Admin Chunks</span><strong>{stats.data?.chunks ?? "-"}</strong></div>
-        <div className="stat"><span className="muted">Tokens</span><strong>{stats.data?.total_tokens ?? "-"}</strong></div>
-        <div className="stat"><span className="muted">Characters</span><strong>{stats.data?.total_chars ?? "-"}</strong></div>
+        <div className="stat"><span className="muted">Generated Chunk Files</span><strong>{stats.data?.filesystem?.chunk_files ?? "-"}</strong></div>
+        <div className="stat"><span className="muted">Markdown Files</span><strong>{stats.data?.filesystem?.markdown_files ?? "-"}</strong></div>
+      </div>
+      <div className="grid cols-2" style={{ marginTop: 16 }}>
+        <div className="panel">
+          <h2>SQLite Footprint</h2>
+          <table className="table">
+            <tbody>
+              <tr><td>Mirrored tokens</td><td>{stats.data?.total_tokens ?? "-"}</td></tr>
+              <tr><td>Mirrored characters</td><td>{stats.data?.total_chars ?? "-"}</td></tr>
+              <tr><td>Dashboard documents</td><td>{stats.data?.documents ?? "-"}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="panel">
+          <h2>Filesystem Corpus</h2>
+          <table className="table">
+            <tbody>
+              <tr><td>Source files</td><td>{stats.data?.filesystem?.source_files ?? "-"}</td></tr>
+              <tr><td>Generated files</td><td>{stats.data?.filesystem?.generated_files ?? "-"}</td></tr>
+              <tr><td>Artifact runs</td><td>{stats.data?.filesystem?.artifact_runs ?? "-"}</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       {stats.data?.error ? <p className="error">{stats.data.error}</p> : null}
     </section>
   );
 }
-
