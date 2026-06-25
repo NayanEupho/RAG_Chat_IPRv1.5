@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
+import { useAdminEvents } from "@/components/use-admin-events";
 import { useAdminData } from "@/components/use-admin-data";
 import { adminApi } from "@/lib/api";
 
@@ -10,6 +11,13 @@ export default function MonitoringPage() {
   const stats = useAdminData(() => adminApi.stats(), 7000);
   const batches = useAdminData(() => adminApi.batches(), 7000);
   const documents = useAdminData(() => adminApi.documents(), 7000);
+  useAdminEvents((event) => {
+    if (["batch_progress", "document_update", "job_update", "job_error", "notification"].includes(event.type)) {
+      void stats.refresh();
+      void batches.refresh();
+      void documents.refresh();
+    }
+  });
 
   const activeBatches = useMemo(
     () => (batches.data?.items || []).filter((batch) => !["DRAFT", "COMPLETE", "FAILED"].includes(batch.status)),
@@ -108,4 +116,3 @@ export default function MonitoringPage() {
     </section>
   );
 }
-

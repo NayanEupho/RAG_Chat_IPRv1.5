@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { adminApi } from "@/lib/api";
 import { useAdminData } from "./use-admin-data";
+import { useAdminEvents } from "./use-admin-events";
 
 const navItems = [
   { href: "/", label: "Monitoring" },
@@ -20,6 +21,11 @@ const navItems = [
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const notifications = useAdminData(() => adminApi.notifications(), 15000);
+  const events = useAdminEvents((event) => {
+    if (event.type === "notification" || event.type === "job_error") {
+      void notifications.refresh();
+    }
+  });
   const unread = notifications.data?.unread_count || 0;
 
   return (
@@ -44,11 +50,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="topbar">
           <div>
             <strong>Admin Dashboard</strong>
-            <span>SQLite workflow state · Chroma vector store</span>
+            <span>SQLite workflow state - Chroma vector store</span>
           </div>
-          <button className="icon-button" type="button" onClick={() => void notifications.refresh()} title="Refresh notifications">
-            Bell {unread > 0 ? <span className="count">{unread}</span> : null}
-          </button>
+          <div className="topbar-actions">
+            <span className={events.connected ? "connection online" : "connection offline"}>
+              {events.connected ? "Live" : "Reconnecting"}
+            </span>
+            <button className="icon-button" type="button" onClick={() => void notifications.refresh()} title="Refresh notifications">
+              Bell {unread > 0 ? <span className="count">{unread}</span> : null}
+            </button>
+          </div>
         </header>
         {children}
       </main>
