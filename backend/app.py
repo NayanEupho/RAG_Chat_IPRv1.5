@@ -83,6 +83,13 @@ async def lifespan(app: FastAPI):
         from backend.admin.worker import admin_worker
         init_admin_db()
         admin_worker.start()
+        recovered = admin_worker.recover_incomplete_jobs()
+        if recovered["requeued"] or recovered["skipped"]:
+            logger.info(
+                "Admin dashboard job recovery: requeued=%s skipped=%s",
+                len(recovered["requeued"]),
+                len(recovered["skipped"]),
+            )
         logger.info("Admin dashboard DB initialized")
     except Exception as e:
         logger.warning(f"Admin dashboard init failed: {e}")

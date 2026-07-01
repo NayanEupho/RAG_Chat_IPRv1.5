@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from backend.admin.db import get_connection, init_admin_db
@@ -35,6 +37,26 @@ def row_to_dict(row: Any) -> dict[str, Any]:
             plain_key = key[:-5]
             result[plain_key] = load_json(result.pop(key), {} if plain_key != "page_numbers" else [])
     return result
+
+
+def normalize_ingestion_type(value: Any) -> str:
+    return "qna" if str(value or "").lower() == "qna" else "general"
+
+
+def batch_ingestion_label(config: dict[str, Any], documents: Optional[list[dict[str, Any]]] = None) -> str:
+    if documents:
+        values = {normalize_ingestion_type((doc.get("effective_config") or {}).get("ingestion_type")) for doc in documents}
+    else:
+        overrides = config.get("per_document_overrides") or {}
+        values = {
+            normalize_ingestion_type(override.get("ingestion_type"))
+            for override in overrides.values()
+            if isinstance(override, dict) and override.get("ingestion_type") is not None
+        }
+        values.add(normalize_ingestion_type(config.get("default_ingestion_type")))
+    if len(values) > 1:
+        return "mix"
+    return f"{next(iter(values), 'general')}_docs"
 
 
 class AdminRepository:
@@ -98,12 +120,17 @@ class AdminRepository:
             conn.close()
         return self.get_batch(batch_id, include_documents=True)
 
-    def list_batches(self, *, status: Optional[str] = None, search: Optional[str] = None, limit: int = 25, page: int = 1) -> dict[str, Any]:
+    def list_batches(self, *, status: Optional[str] = None, search: Optional[str] = None, limit: int = 25, page: int = 1, include_documents: bool = False) -> dict[str, Any]:
         where = []
         params: list[Any] = []
         if status:
-            where.append("status = ?")
-            params.append(status)
+            statuses = [item.strip() for item in status.split(",") if item.strip()]
+            if len(statuses) == 1:
+                where.append("status = ?")
+                params.append(statuses[0])
+            elif statuses:
+                where.append(f"status IN ({','.join('?' for _ in statuses)})")
+                params.extend(statuses)
         if search:
             where.append("(name LIKE ? OR description LIKE ?)")
             params.extend([f"%{search}%", f"%{search}%"])
@@ -116,7 +143,10 @@ class AdminRepository:
                 f"SELECT * FROM admin_batches {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
-            return {"items": [self._batch_from_row(row, include_documents=False) for row in rows], "total": total, "page": page}
+            items = [self._batch_from_row(row, include_documents=False) for row in rows]
+            if include_documents:
+                items = [self.get_batch(item["batch_id"], include_documents=True) for item in items]
+            return {"items": items, "total": total, "page": page}
         finally:
             conn.close()
 
@@ -133,6 +163,7 @@ class AdminRepository:
                     (batch_id,),
                 ).fetchall()
                 batch["documents"] = [self.get_document(doc["document_id"]) for doc in docs]
+                batch["ingestion_label"] = batch_ingestion_label(batch["config"], batch["documents"])
             return batch
         finally:
             conn.close()
@@ -140,21 +171,50 @@ class AdminRepository:
     def update_batch_config(self, batch_id: str, config: dict[str, Any]) -> dict[str, Any]:
         conn = get_connection()
         try:
+            batch_row = conn.execute("SELECT status FROM admin_batches WHERE batch_id = ?", (batch_id,)).fetchone()
+            if not batch_row:
+                raise KeyError("Batch not found")
+            if batch_row["status"] != BatchStatus.DRAFT.value:
+                raise ValueError("Only DRAFT batches can be edited")
             conn.execute(
                 "UPDATE admin_batches SET config_json = ? WHERE batch_id = ?",
                 (dump_json(config), batch_id),
             )
-            docs = conn.execute("SELECT document_id FROM admin_documents WHERE batch_id = ?", (batch_id,)).fetchall()
+            docs = conn.execute("SELECT document_id, source_file_path, effective_config_json FROM admin_documents WHERE batch_id = ?", (batch_id,)).fetchall()
             for doc in docs:
                 effective = self.effective_config(config, doc["document_id"])
+                previous = load_json(doc["effective_config_json"], {})
+                source_path = doc["source_file_path"]
+                if normalize_ingestion_type(previous.get("ingestion_type")) != effective["ingestion_type"]:
+                    source_path = self._move_draft_source(batch_id, doc["document_id"], source_path, effective["ingestion_type"])
                 conn.execute(
-                    "UPDATE admin_documents SET effective_config_json = ? WHERE document_id = ?",
-                    (dump_json(effective), doc["document_id"]),
+                    "UPDATE admin_documents SET effective_config_json = ?, source_file_path = ? WHERE document_id = ?",
+                    (dump_json(effective), source_path, doc["document_id"]),
                 )
             conn.commit()
         finally:
             conn.close()
         return self.get_batch(batch_id, include_documents=True)
+
+    def _move_draft_source(self, batch_id: str, document_id: str, source_file_path: str, ingestion_type: str) -> str:
+        from backend.admin.inventory import ADMIN_FOLDER, SOURCE_ROOT
+
+        source = Path(source_file_path)
+        if not source.exists():
+            return source_file_path
+        type_folder = "QnA" if normalize_ingestion_type(ingestion_type) == "qna" else "General"
+        target = SOURCE_ROOT / ADMIN_FOLDER / type_folder / "batches" / batch_id / "documents" / document_id / "source" / source.name
+        if source.resolve() == target.resolve():
+            return str(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        doc_root = source.parent.parent
+        for path in [source.parent, doc_root, doc_root.parent]:
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        return str(target)
 
     def submit_batch(self, batch_id: str) -> dict[str, Any]:
         submitted_at = now_iso()
@@ -194,14 +254,130 @@ class AdminRepository:
         finally:
             conn.close()
 
+    def cancel_batch(self, batch_id: str) -> dict[str, Any]:
+        from backend.admin import files
+
+        active_statuses = {
+            BatchStatus.SUBMITTED.value,
+            BatchStatus.PARSING.value,
+            BatchStatus.NORMALIZING.value,
+            BatchStatus.REVIEW_PENDING.value,
+            BatchStatus.REVIEWING.value,
+            BatchStatus.CHUNKING.value,
+        }
+        batch = self.get_batch(batch_id, include_documents=True)
+        if batch["status"] not in active_statuses:
+            raise ValueError("Only active ingestion batches can be cancelled")
+
+        completed_at = now_iso()
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE admin_jobs
+                SET cancel_requested = 1,
+                    status = CASE WHEN status IN (?, ?) THEN ? ELSE status END,
+                    completed_at = CASE WHEN status IN (?, ?) THEN ? ELSE completed_at END,
+                    detail = CASE WHEN status IN (?, ?) THEN ? ELSE detail END
+                WHERE batch_id = ?
+                """,
+                (
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.CANCELLED.value,
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    completed_at,
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    "Batch cancelled by user",
+                    batch_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE admin_documents SET status = ?, error_summary = NULL WHERE batch_id = ?",
+                (DocumentStatus.CANCELLED.value, batch_id),
+            )
+            conn.execute(
+                """
+                UPDATE admin_batches
+                SET status = ?, documents_in_progress = 0, completed_at = COALESCE(completed_at, ?)
+                WHERE batch_id = ?
+                """,
+                (BatchStatus.CANCELLED.value, completed_at, batch_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        cleanup_errors: list[str] = []
+        try:
+            from backend.rag.store import get_vector_store
+
+            store = get_vector_store()
+            if hasattr(store, "delete_document"):
+                for document in batch.get("documents", []):
+                    try:
+                        store.delete_document(document["document_id"])
+                    except Exception as exc:
+                        cleanup_errors.append(f"{document['document_id']} vector cleanup: {exc}")
+        except Exception as exc:
+            cleanup_errors.append(f"{batch_id} vector store cleanup: {exc}")
+        for document in batch.get("documents", []):
+            try:
+                files.delete_document_source_tree(document["source_file_path"])
+            except Exception as exc:
+                cleanup_errors.append(f"{document['document_id']} source cleanup: {exc}")
+        try:
+            files.delete_tree(files.generated_root() / "batches" / batch_id)
+        except Exception as exc:
+            cleanup_errors.append(f"{batch_id} generated cleanup: {exc}")
+
+        self.log(
+            stage=PipelineStage.CLEANUP.value,
+            level="INFO",
+            message="Batch cancelled and ingestion artifacts removed",
+            detail="\n".join(cleanup_errors) if cleanup_errors else None,
+            batch_id=batch_id,
+        )
+        self.mark_batch_notifications_read(batch_id)
+        cancelled = self.get_batch(batch_id, include_documents=True)
+        return {"cancelled": True, "batch": cancelled, "cleanup_errors": cleanup_errors}
+
+    def cancel_active_batches(self) -> dict[str, Any]:
+        active_statuses = [
+            BatchStatus.SUBMITTED.value,
+            BatchStatus.PARSING.value,
+            BatchStatus.NORMALIZING.value,
+            BatchStatus.REVIEWING.value,
+            BatchStatus.CHUNKING.value,
+        ]
+        conn = get_connection()
+        try:
+            placeholders = ",".join("?" for _ in active_statuses)
+            rows = conn.execute(f"SELECT batch_id FROM admin_batches WHERE status IN ({placeholders})", active_statuses).fetchall()
+        finally:
+            conn.close()
+        cancelled = []
+        errors = []
+        for row in rows:
+            try:
+                cancelled.append(self.cancel_batch(row["batch_id"]))
+            except Exception as exc:
+                errors.append({"batch_id": row["batch_id"], "error": str(exc)})
+        return {"cancelled": cancelled, "errors": errors, "total": len(cancelled)}
+
     def effective_config(self, batch_config: dict[str, Any], document_id: str) -> dict[str, Any]:
         effective = {
             "parsers": batch_config.get("default_parsers") or ["docling"],
             "normalization_enabled": bool(batch_config.get("default_normalization_enabled", False)),
             "normalization_models": batch_config.get("default_normalization_models") or [],
+            "ingestion_type": normalize_ingestion_type(batch_config.get("default_ingestion_type")),
+            "review_required": bool(batch_config.get("review_required", True)),
         }
         override = (batch_config.get("per_document_overrides") or {}).get(document_id) or {}
         effective.update({k: v for k, v in override.items() if v is not None})
+        effective["ingestion_type"] = normalize_ingestion_type(effective.get("ingestion_type"))
         return effective
 
     def get_document(self, document_id: str) -> dict[str, Any]:
@@ -212,6 +388,7 @@ class AdminRepository:
                 raise KeyError("Document not found")
             doc = row_to_dict(row)
             doc["effective_config"] = doc.pop("effective_config")
+            doc["ingestion_type"] = normalize_ingestion_type(doc["effective_config"].get("ingestion_type"))
             doc["parse_variants"] = [
                 self._parse_variant_from_row(v)
                 for v in conn.execute(
@@ -246,6 +423,62 @@ class AdminRepository:
             return {"items": [self.get_document(row["document_id"]) for row in rows], "total": total, "page": page}
         finally:
             conn.close()
+
+    def list_indexed_document_summaries(self, *, limit: int = 10000) -> list[dict[str, Any]]:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                    d.document_id,
+                    d.batch_id,
+                    d.original_filename,
+                    d.source_file_path,
+                    d.file_size_bytes,
+                    d.effective_config_json,
+                    d.status,
+                    d.chunk_count,
+                    d.indexed_at,
+                    c.raw_md_path,
+                    c.parsed_md_path,
+                    c.normalized_md_path,
+                    c.review_approved_md_path
+                FROM admin_documents d
+                LEFT JOIN admin_canonical_files c ON c.document_id = d.document_id
+                WHERE d.status = ?
+                ORDER BY d.indexed_at DESC, d.uploaded_at DESC
+                LIMIT ?
+                """,
+                (DocumentStatus.INDEXED.value, limit),
+            ).fetchall()
+            documents = []
+            for row in rows:
+                document = row_to_dict(row)
+                document["effective_config"] = document.pop("effective_config")
+                document["ingestion_type"] = normalize_ingestion_type(document["effective_config"].get("ingestion_type"))
+                document["canonical_files"] = {
+                    "raw_md_path": document.pop("raw_md_path", None),
+                    "parsed_md_path": document.pop("parsed_md_path", None),
+                    "normalized_md_path": document.pop("normalized_md_path", None),
+                    "review_approved_md_path": document.pop("review_approved_md_path", None),
+                }
+                documents.append(document)
+            return documents
+        finally:
+            conn.close()
+
+    def delete_indexed_document_record(self, document_id: str) -> dict[str, Any]:
+        document = self.get_document(document_id)
+        if document["status"] != DocumentStatus.INDEXED.value:
+            raise ValueError("Only indexed documents can be deleted from the control center")
+        conn = get_connection()
+        try:
+            conn.execute("DELETE FROM admin_documents WHERE document_id = ?", (document_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        self.recalculate_batch_counts(document["batch_id"])
+        return {"deleted": True, "document": document}
 
     def create_parse_variant(self, *, document_id: str, parser_type: str) -> dict[str, Any]:
         variant_id = new_id("parse")
@@ -321,6 +554,8 @@ class AdminRepository:
         fields: dict[str, Any] = {"status": status}
         if error_summary is not None:
             fields["error_summary"] = error_summary
+        elif not status.endswith("_FAILED"):
+            fields["error_summary"] = None
         if chunk_count is not None:
             fields["chunk_count"] = chunk_count
         if indexed_at is not None:
@@ -370,6 +605,69 @@ class AdminRepository:
     def update_review(self, document_id: str, **fields: Any) -> dict[str, Any]:
         self._update("admin_reviews", "document_id", document_id, fields)
         return self.get_review(document_id) or {}
+
+    def build_review_action(self, document: dict[str, Any], *, action: str, reason: Optional[str] = None, cleanup_errors: Optional[list[str]] = None) -> dict[str, Any]:
+        review = document.get("review") or {}
+        source_path = document.get("source_file_path")
+        generated_document_root = None
+        if document.get("batch_id") and document.get("document_id"):
+            generated_document_root = str(Path("generated_doc_md") / "Admin_Dashboard" / "batches" / document["batch_id"] / "documents" / document["document_id"])
+        target_source = review.get("edited_md_path") or review.get("uploaded_md_path") or review.get("base_md_path")
+        return {
+            "action": action,
+            "reason": reason,
+            "timestamp": now_iso(),
+            "review_required": bool((document.get("effective_config") or {}).get("review_required", True)),
+            "llm_normalized": bool((document.get("effective_config") or {}).get("normalization_enabled")),
+            "selected_parse_variant_id": review.get("selected_parse_variant_id"),
+            "selected_norm_variant_id": review.get("selected_norm_variant_id"),
+            "base_md_path": review.get("base_md_path"),
+            "edited": bool(review.get("edited_md_path")),
+            "edited_md_path": review.get("edited_md_path"),
+            "replaced": bool(review.get("uploaded_md_path")),
+            "uploaded_md_path": review.get("uploaded_md_path"),
+            "final_review_target_path": target_source,
+            "source_file_path": source_path,
+            "deleted_artifacts": {
+                "source_document_tree": str(Path(source_path).parent.parent) if source_path else None,
+                "generated_document_tree": generated_document_root,
+            } if action == "rejected_deleted" else {},
+            "cleanup_completed": action != "rejected_deleted" or not cleanup_errors,
+            "cleanup_errors": cleanup_errors or [],
+        }
+
+    def reject_review(self, document_id: str, reason: Optional[str] = None, cleanup_errors: Optional[list[str]] = None) -> dict[str, Any]:
+        document = self.get_document(document_id)
+        review = document.get("review")
+        if not review:
+            parse_variant = next((variant for variant in document.get("parse_variants", []) if variant.get("is_selected_for_review")), None)
+            parse_variant = parse_variant or next((variant for variant in document.get("parse_variants", []) if variant.get("status") == "COMPLETE"), None)
+            norm_variant = None
+            if parse_variant:
+                norm_variant = next((variant for variant in parse_variant.get("norm_variants", []) if variant.get("is_selected_for_review")), None)
+                norm_variant = norm_variant or next((variant for variant in parse_variant.get("norm_variants", []) if variant.get("status") == "COMPLETE"), None)
+                base_path = norm_variant.get("normalized_md_path") if norm_variant else parse_variant.get("parsed_md_path")
+                if base_path:
+                    review = self.create_or_update_review(
+                        document_id=document_id,
+                        selected_parse_variant_id=parse_variant["variant_id"],
+                        selected_norm_variant_id=norm_variant["norm_variant_id"] if norm_variant else None,
+                        base_md_path=base_path,
+                        status="IN_PROGRESS",
+                    )
+                    document = {**document, "review": review}
+        action = self.build_review_action(document, action="rejected_deleted", reason=reason, cleanup_errors=cleanup_errors)
+        if review:
+            self.update_review(document_id, status="REJECTED", notes=reason, approved_at=now_iso(), review_action_json=action)
+        self.set_document_status(document_id, DocumentStatus.REVIEW_REJECTED.value)
+        return self.log(
+            stage=PipelineStage.REVIEW.value,
+            level="INFO",
+            message="Document rejected in review",
+            detail=dump_json(action),
+            batch_id=document["batch_id"],
+            document_id=document_id,
+        )
 
     def get_review(self, document_id: str) -> Optional[dict[str, Any]]:
         conn = get_connection()
@@ -489,6 +787,53 @@ class AdminRepository:
         finally:
             conn.close()
 
+    def list_recoverable_jobs(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT * FROM admin_jobs
+                WHERE status IN (?, ?)
+                  AND cancel_requested = 0
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (JobStatus.QUEUED.value, JobStatus.RUNNING.value, limit),
+            ).fetchall()
+            return [row_to_dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def reset_job_for_recovery(self, job_id: str) -> dict[str, Any]:
+        job = self.get_job(job_id)
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE admin_jobs
+                SET status = ?,
+                    progress = 0,
+                    detail = ?,
+                    error_message = NULL,
+                    error_detail = NULL,
+                    started_at = NULL,
+                    completed_at = NULL,
+                    duration_ms = NULL,
+                    attempt = ?
+                WHERE job_id = ?
+                """,
+                (
+                    JobStatus.QUEUED.value,
+                    "Recovered after backend restart; queued for retry.",
+                    int(job.get("attempt") or 1) + 1,
+                    job_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_job(job_id)
+
     def log(
         self,
         *,
@@ -504,6 +849,19 @@ class AdminRepository:
     ) -> dict[str, Any]:
         log_id = new_id("log")
         timestamp = now_iso()
+        payload = {
+            "log_id": log_id,
+            "batch_id": batch_id,
+            "document_id": document_id,
+            "parse_variant_id": parse_variant_id,
+            "norm_variant_id": norm_variant_id,
+            "job_id": job_id,
+            "stage": stage,
+            "level": level,
+            "message": message,
+            "detail": detail,
+            "timestamp": timestamp,
+        }
         conn = get_connection()
         try:
             conn.execute(
@@ -518,19 +876,13 @@ class AdminRepository:
             conn.commit()
         finally:
             conn.close()
-        return {
-            "log_id": log_id,
-            "batch_id": batch_id,
-            "document_id": document_id,
-            "parse_variant_id": parse_variant_id,
-            "norm_variant_id": norm_variant_id,
-            "job_id": job_id,
-            "stage": stage,
-            "level": level,
-            "message": message,
-            "detail": detail,
-            "timestamp": timestamp,
-        }
+        try:
+            from backend.admin.events import event_hub
+
+            event_hub.publish({"type": "log", "data": payload, "batch_id": batch_id, "document_id": document_id, "message": message})
+        except Exception:
+            pass
+        return payload
 
     def list_logs(self, *, level: Optional[str] = None, stage: Optional[str] = None, search: Optional[str] = None, limit: int = 50, page: int = 1) -> dict[str, Any]:
         where = []
@@ -587,6 +939,24 @@ class AdminRepository:
             "created_at": created_at,
         }
 
+    def notification_exists(self, *, title: str, batch_id: Optional[str] = None, type_: Optional[str] = None) -> bool:
+        where = ["title = ?"]
+        params: list[Any] = [title]
+        if batch_id is None:
+            where.append("batch_id IS NULL")
+        else:
+            where.append("batch_id = ?")
+            params.append(batch_id)
+        if type_ is not None:
+            where.append("type = ?")
+            params.append(type_)
+        conn = get_connection()
+        try:
+            row = conn.execute(f"SELECT 1 FROM admin_notifications WHERE {' AND '.join(where)} LIMIT 1", params).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
     def list_notifications(self, *, unread_only: bool = False, limit: int = 100, page: int = 1) -> dict[str, Any]:
         where = "WHERE read = 0" if unread_only else ""
         offset = max(page - 1, 0) * limit
@@ -622,6 +992,30 @@ class AdminRepository:
         conn = get_connection()
         try:
             cur = conn.execute("UPDATE admin_notifications SET read = 1 WHERE read = 0")
+            conn.commit()
+            return {"updated": cur.rowcount}
+        finally:
+            conn.close()
+
+    def mark_document_notifications_read(self, document_id: str) -> dict[str, Any]:
+        conn = get_connection()
+        try:
+            cur = conn.execute(
+                "UPDATE admin_notifications SET read = 1 WHERE document_id = ? AND read = 0",
+                (document_id,),
+            )
+            conn.commit()
+            return {"updated": cur.rowcount}
+        finally:
+            conn.close()
+
+    def mark_batch_notifications_read(self, batch_id: str) -> dict[str, Any]:
+        conn = get_connection()
+        try:
+            cur = conn.execute(
+                "UPDATE admin_notifications SET read = 1 WHERE batch_id = ? AND read = 0",
+                (batch_id,),
+            )
             conn.commit()
             return {"updated": cur.rowcount}
         finally:
@@ -703,6 +1097,36 @@ class AdminRepository:
         finally:
             conn.close()
 
+    def chunk_stats(self) -> dict[str, Any]:
+        conn = get_connection()
+        try:
+            totals = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_chunks,
+                    COUNT(DISTINCT document_id) AS documents_with_chunks,
+                    COALESCE(AVG(token_count), 0) AS avg_tokens_per_chunk,
+                    COALESCE(AVG(char_count), 0) AS avg_chars_per_chunk,
+                    COALESCE(SUM(token_count), 0) AS total_tokens,
+                    COALESCE(SUM(char_count), 0) AS total_chars
+                FROM admin_chunks
+                """
+            ).fetchone()
+            model_rows = conn.execute(
+                """
+                SELECT embedding_model, COUNT(*) AS chunks
+                FROM admin_chunks
+                GROUP BY embedding_model
+                ORDER BY chunks DESC, embedding_model ASC
+                """
+            ).fetchall()
+            return {
+                **row_to_dict(totals),
+                "embedding_models": [row_to_dict(row) for row in model_rows],
+            }
+        finally:
+            conn.close()
+
     def upsert_llm_endpoint(self, *, endpoint_id: Optional[str], model_id: str, endpoint: str, display_name: str, enabled: bool) -> dict[str, Any]:
         endpoint_id = endpoint_id or new_id("llm")
         timestamp = now_iso()
@@ -768,19 +1192,44 @@ class AdminRepository:
             indexed = statuses.count(DocumentStatus.INDEXED.value)
             failed = sum(1 for value in statuses if value.endswith("_FAILED"))
             pending_review = statuses.count(DocumentStatus.REVIEW_PENDING.value) + statuses.count(DocumentStatus.REVIEW_IN_PROGRESS.value)
-            in_progress = sum(1 for value in statuses if value.endswith("_RUNNING") or value.endswith("_PENDING"))
+            in_progress = sum(
+                1
+                for value in statuses
+                if (value.endswith("_RUNNING") or value.endswith("_PENDING")) and value != DocumentStatus.REVIEW_PENDING.value
+            )
             batch_status = self._derive_batch_status(statuses)
-            completed_at = now_iso() if total > 0 and batch_status in {BatchStatus.COMPLETE.value, BatchStatus.FAILED.value, BatchStatus.PARTIALLY_COMPLETE.value} else None
+            completed_at = now_iso() if total > 0 and batch_status in {
+                BatchStatus.COMPLETE.value,
+                BatchStatus.FAILED.value,
+                BatchStatus.PARTIALLY_COMPLETE.value,
+                BatchStatus.CANCELLED.value,
+            } else None
             conn.execute(
                 """
                 UPDATE admin_batches
                 SET status = ?, total_documents = ?, documents_indexed = ?,
                     documents_failed = ?, documents_in_progress = ?,
                     documents_pending_review = ?,
-                    completed_at = COALESCE(completed_at, ?)
+                    completed_at = CASE
+                        WHEN ? IS NULL THEN NULL
+                        WHEN status != ? THEN ?
+                        ELSE COALESCE(completed_at, ?)
+                    END
                 WHERE batch_id = ?
                 """,
-                (batch_status, total, indexed, failed, in_progress, pending_review, completed_at, batch_id),
+                (
+                    batch_status,
+                    total,
+                    indexed,
+                    failed,
+                    in_progress,
+                    pending_review,
+                    completed_at,
+                    batch_status,
+                    completed_at,
+                    completed_at,
+                    batch_id,
+                ),
             )
             conn.commit()
         finally:
@@ -789,10 +1238,26 @@ class AdminRepository:
     def _derive_batch_status(self, statuses: list[str]) -> str:
         if not statuses:
             return BatchStatus.DRAFT.value
+        terminal = {
+            DocumentStatus.INDEXED.value,
+            DocumentStatus.REVIEW_REJECTED.value,
+            DocumentStatus.CANCELLED.value,
+            DocumentStatus.PARSE_FAILED.value,
+            DocumentStatus.NORMALIZE_FAILED.value,
+            DocumentStatus.CHUNK_FAILED.value,
+        }
         if all(value == DocumentStatus.INDEXED.value for value in statuses):
             return BatchStatus.COMPLETE.value
+        if all(value == DocumentStatus.REVIEW_REJECTED.value for value in statuses):
+            return BatchStatus.FAILED.value
+        if all(value == DocumentStatus.CANCELLED.value for value in statuses):
+            return BatchStatus.CANCELLED.value
+        if any(value == DocumentStatus.CANCELLED.value for value in statuses) and all(value in terminal for value in statuses):
+            return BatchStatus.CANCELLED.value
         if all(value.endswith("_FAILED") for value in statuses):
             return BatchStatus.FAILED.value
+        if all(value in terminal for value in statuses) and any(value == DocumentStatus.INDEXED.value for value in statuses):
+            return BatchStatus.PARTIALLY_COMPLETE.value
         if any(value == DocumentStatus.INDEXED.value for value in statuses) and any(value.endswith("_FAILED") for value in statuses):
             return BatchStatus.PARTIALLY_COMPLETE.value
         if any(value.startswith("CHUNK") for value in statuses):
@@ -808,6 +1273,7 @@ class AdminRepository:
     def _batch_from_row(self, row: Any, *, include_documents: bool) -> dict[str, Any]:
         batch = row_to_dict(row)
         batch["config"] = batch.pop("config")
+        batch["ingestion_label"] = batch_ingestion_label(batch["config"])
         if include_documents:
             batch["documents"] = []
         return batch

@@ -11,9 +11,11 @@ export type DocumentStatus =
   | "REVIEW_PENDING"
   | "REVIEW_IN_PROGRESS"
   | "REVIEW_APPROVED"
+  | "REVIEW_REJECTED"
   | "CHUNK_PENDING"
   | "CHUNK_RUNNING"
   | "CHUNK_FAILED"
+  | "CANCELLED"
   | "INDEXED";
 
 export type BatchStatus =
@@ -26,9 +28,11 @@ export type BatchStatus =
   | "CHUNKING"
   | "PARTIALLY_COMPLETE"
   | "COMPLETE"
-  | "FAILED";
+  | "FAILED"
+  | "CANCELLED";
 
 export type VariantStatus = "PENDING" | "RUNNING" | "COMPLETE" | "FAILED";
+export type IngestionType = "general" | "qna";
 
 export interface NormModelConfig {
   model_id: string;
@@ -40,6 +44,8 @@ export interface EffectiveDocConfig {
   parsers: string[];
   normalization_enabled: boolean;
   normalization_models: NormModelConfig[];
+  ingestion_type: IngestionType;
+  review_required?: boolean;
 }
 
 export interface NormVariant {
@@ -83,10 +89,24 @@ export interface ReviewRecord {
   edited_md_path: string | null;
   uploaded_md_path: string | null;
   review_approved_md_path: string | null;
-  status: "PENDING" | "IN_PROGRESS" | "APPROVED";
+  status: "PENDING" | "IN_PROGRESS" | "APPROVED" | "REJECTED";
   opened_at: string | null;
   approved_at: string | null;
   notes: string | null;
+  review_action?: {
+    action?: string;
+    reason?: string | null;
+    timestamp?: string;
+    review_required?: boolean;
+    llm_normalized?: boolean;
+    edited?: boolean;
+    replaced?: boolean;
+    cleanup_completed?: boolean;
+    cleanup_errors?: string[];
+    deleted_artifacts?: Record<string, string | null>;
+    review_approved_md_path?: string;
+    final_review_target_path?: string;
+  } | null;
 }
 
 export interface CanonicalFiles {
@@ -106,6 +126,7 @@ export interface AdminDocument {
   file_type: "pdf" | "docx";
   file_size_bytes: number;
   effective_config: EffectiveDocConfig;
+  ingestion_type: IngestionType;
   status: DocumentStatus;
   parse_variants: ParseVariant[];
   review: ReviewRecord | null;
@@ -122,6 +143,7 @@ export interface Batch {
   description: string | null;
   status: BatchStatus;
   config: Record<string, unknown>;
+  ingestion_label: "general_docs" | "qna_docs" | "mix";
   documents?: AdminDocument[];
   total_documents: number;
   documents_indexed: number;
@@ -144,11 +166,17 @@ export interface JobLog {
   message: string;
   detail: string | null;
   timestamp: string;
+  job_id?: string | null;
+  parse_variant_id?: string | null;
+  norm_variant_id?: string | null;
 }
 
 export interface NotificationItem {
   notification_id: string;
   type: string;
+  batch_id?: string | null;
+  document_id?: string | null;
+  job_id?: string | null;
   title: string;
   message: string;
   detail: string | null;
@@ -158,8 +186,8 @@ export interface NotificationItem {
 
 export interface ChunkRecord {
   chunk_id: string;
-  document_id: string;
-  batch_id: string;
+  document_id: string | null;
+  batch_id: string | null;
   content: string;
   chunk_index: number;
   section_path: string | null;
@@ -169,6 +197,63 @@ export interface ChunkRecord {
   embedding_model: string;
   indexed_at: string;
   chroma_id: string;
+  filename?: string | null;
+  source_path?: string | null;
+  doc_type?: string | null;
+  origin?: "admin" | "legacy";
+  metadata?: Record<string, unknown>;
+}
+
+export interface VectorStatsDetail {
+  healthy: boolean;
+  error?: string | null;
+  latency_ms: number;
+  indexed_documents: number;
+  admin_documents: number;
+  legacy_documents: number;
+  chroma_chunks: number | null;
+  mirrored_admin_chunks: number;
+  avg_chunks_per_document: number;
+  avg_tokens_per_chunk: number;
+  avg_chars_per_chunk: number;
+  total_tokens: number;
+  total_chars: number;
+  doc_type_breakdown: Record<string, number>;
+  embedding_models: Array<{ embedding_model: string; chunks: number }>;
+  warnings: Array<{ type: string; message: string; impact?: string; recommendation?: string }>;
+}
+
+export interface VectorProbeChunk {
+  rank?: number;
+  rerank_rank?: number;
+  chunk_id: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  distance?: number | null;
+  similarity?: number | null;
+  rerank_score?: number | null;
+  filename?: string | null;
+  document_id?: string | null;
+  batch_id?: string | null;
+  chunk_index?: number | null;
+  doc_type?: string | null;
+}
+
+export interface VectorProbeResult {
+  query: string;
+  filters: { document_id?: string | null; filename?: string | null; doc_type?: string | null };
+  top_k: number;
+  candidate_k: number;
+  embedding_model: string;
+  rerank_enabled: boolean;
+  reranker_model?: string | null;
+  latency_ms: number;
+  embedding_ms: number;
+  vector_ms: number;
+  rerank_ms?: number | null;
+  candidates: VectorProbeChunk[];
+  final_chunks: VectorProbeChunk[];
+  model_context: string;
 }
 
 export interface PageResult<T> {
@@ -176,6 +261,30 @@ export interface PageResult<T> {
   total: number;
   page?: number;
   unread_count?: number;
+}
+
+export interface IndexedWarehouseDocument {
+  id: string;
+  origin: "admin" | "legacy";
+  document_id: string | null;
+  filename: string;
+  source_path: string;
+  safe_source_path: string | null;
+  status: "INDEXED";
+  chunk_count: number;
+  parser: string | null;
+  doc_type: IngestionType;
+  ingestion_type: IngestionType;
+  batch_id: string | null;
+  indexed_at: string;
+  file_size_bytes: number;
+  downloads?: {
+    source: boolean;
+    raw?: boolean;
+    parsed: boolean;
+    normalized: boolean;
+    final: boolean;
+  };
 }
 
 export interface AdminStats {
@@ -189,7 +298,9 @@ export interface AdminStats {
   total_chars: number;
   healthy?: boolean;
   chroma_count?: number | null;
+  retrieval_chunks?: number | null;
   error?: string;
+  vector_error?: string;
   filesystem?: InventorySummary;
 }
 
@@ -218,16 +329,41 @@ export interface RuntimeConfig {
     model_id: string | null;
     endpoint: string | null;
     display_name: string;
+    engine?: string;
+    configured?: boolean;
   };
   embedding: {
     model_id: string | null;
     endpoint: string | null;
     display_name: string;
+    engine?: string;
+    configured?: boolean;
   };
+  models?: Array<{
+    role: string;
+    model_id: string | null;
+    endpoint: string | null;
+    display_name: string;
+    engine: string;
+    configured: boolean;
+    health_status?: "online" | "offline" | "unknown";
+    health_error?: string | null;
+    health_latency_ms?: number | null;
+    health_cached?: boolean;
+    health_checked_at?: string | null;
+  }>;
   parsing_mode: string;
+  parser_options: Array<{
+    value: string;
+    label: string;
+    description: string;
+    available: boolean;
+  }>;
   vision: {
     model_id: string | null;
     endpoint: string | null;
+    engine?: string;
+    configured?: boolean;
   };
 }
 

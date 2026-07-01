@@ -123,7 +123,8 @@ def init_admin_db() -> None:
                 status TEXT NOT NULL,
                 opened_at TEXT,
                 approved_at TEXT,
-                notes TEXT
+                notes TEXT,
+                review_action_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS admin_canonical_files (
@@ -234,7 +235,9 @@ def init_admin_db() -> None:
             );
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(admin_reviews)").fetchall()}
+        if "review_action_json" not in columns:
+            conn.execute("ALTER TABLE admin_reviews ADD COLUMN review_action_json TEXT")
         conn.commit()
     finally:
         conn.close()
-

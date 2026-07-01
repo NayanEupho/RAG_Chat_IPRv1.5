@@ -2,6 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+interface CacheRecord<T = unknown> {
+  data: T;
+  stale: boolean;
+  updatedAt: number;
+}
+
+const cache = new Map<string, CacheRecord>();
+const inflight = new Map<string, Promise<unknown>>();
+
+const UPDATED_EVENT = "admin-data-cache-updated";
+const INVALIDATED_EVENT = "admin-data-invalidated";
+
+interface InvalidationDetail {
+  keys?: string[];
+}
+
 interface DataState<T> {
   data: T | null;
   error: string | null;
@@ -9,20 +25,96 @@ interface DataState<T> {
   refresh: () => Promise<void>;
 }
 
-export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000): DataState<T> {
-  const [data, setData] = useState<T | null>(null);
+export function invalidateAdminData(keys?: string[]): void {
+  if (typeof window === "undefined") return;
+  if (!keys?.length) {
+    cache.forEach((record) => {
+      record.stale = true;
+    });
+  } else {
+    cache.forEach((record, key) => {
+      if (matchesInvalidation(key, keys)) record.stale = true;
+    });
+  }
+  window.dispatchEvent(new CustomEvent<InvalidationDetail>(INVALIDATED_EVENT, { detail: { keys } }));
+}
+
+export function setAdminDataCache<T>(key: string, data: T): void {
+  cache.set(key, { data, stale: false, updatedAt: Date.now() });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(UPDATED_EVENT, { detail: { key } }));
+  }
+}
+
+export async function prefetchAdminData<T>(key: string, loader: () => Promise<T>): Promise<void> {
+  if (freshCached<T>(key)) return;
+  if (inflight.has(key)) {
+    await inflight.get(key);
+    return;
+  }
+  const promise = loader()
+    .then((data) => {
+      setAdminDataCache(key, data);
+      return data;
+    })
+    .finally(() => {
+      inflight.delete(key);
+    });
+  inflight.set(key, promise);
+  await promise;
+}
+
+function matchesInvalidation(cacheKey: string, keys?: string[]): boolean {
+  if (!keys?.length) return true;
+  return keys.some((key) => {
+    if (key === cacheKey) return true;
+    if (key.endsWith("*")) return cacheKey.startsWith(key.slice(0, -1));
+    return false;
+  });
+}
+
+function freshCached<T>(key?: string): T | null {
+  if (!key) return null;
+  const record = cache.get(key);
+  if (!record || record.stale) return null;
+  return record.data as T;
+}
+
+export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, cacheKey?: string, enabled = true): DataState<T> {
+  const [data, setData] = useState<T | null>(() => (enabled ? freshCached<T>(cacheKey) : null));
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled && !freshCached<T>(cacheKey));
   const loaderRef = useRef(loader);
+  const keyRef = useRef(cacheKey);
+  const enabledRef = useRef(enabled);
 
   useEffect(() => {
     loaderRef.current = loader;
   }, [loader]);
 
+  useEffect(() => {
+    keyRef.current = cacheKey;
+  }, [cacheKey]);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
+
   const refresh = useCallback(async () => {
+    if (!enabledRef.current) {
+      setLoading(false);
+      return;
+    }
     try {
       setError(null);
-      const next = await loaderRef.current();
+      const key = keyRef.current;
+      const next = key
+        ? await (async () => {
+            await prefetchAdminData(key, loaderRef.current);
+            const record = cache.get(key);
+            return record?.data as T;
+          })()
+        : await loaderRef.current();
       setData(next);
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "Unable to load data");
@@ -32,12 +124,48 @@ export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000): D
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const handle = window.setInterval(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
+    const cached = freshCached<T>(cacheKey);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+    } else {
+      setData(null);
+      setLoading(true);
       void refresh();
-    }, intervalMs);
-    return () => window.clearInterval(handle);
-  }, [intervalMs, refresh]);
+    }
+
+    function handleUpdated(event: Event) {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (!cacheKey || key !== cacheKey || !cache.has(cacheKey)) return;
+      const record = cache.get(cacheKey);
+      if (!record || record.stale) return;
+      setData(record.data as T);
+      setLoading(false);
+    }
+
+    function handleInvalidated(event: Event) {
+      const keys = (event as CustomEvent<InvalidationDetail>).detail?.keys;
+      if (!cacheKey || matchesInvalidation(cacheKey, keys)) {
+        setData(null);
+        setLoading(true);
+        void refresh();
+      }
+    }
+
+    window.addEventListener(UPDATED_EVENT, handleUpdated);
+    window.addEventListener(INVALIDATED_EVENT, handleInvalidated);
+
+    const handle = intervalMs > 0 ? window.setInterval(() => void refresh(), intervalMs) : null;
+    return () => {
+      window.removeEventListener(UPDATED_EVENT, handleUpdated);
+      window.removeEventListener(INVALIDATED_EVENT, handleInvalidated);
+      if (handle) window.clearInterval(handle);
+    };
+  }, [cacheKey, enabled, intervalMs, refresh]);
 
   return { data, error, loading, refresh };
 }

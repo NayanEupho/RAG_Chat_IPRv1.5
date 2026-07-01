@@ -26,6 +26,11 @@ class AppConfig(BaseModel):
     """
     main_model: Optional[OllamaConfig] = None
     embedding_model: Optional[OllamaConfig] = None
+    normalization_model: Optional[OllamaConfig] = None
+    main_engine: str = "ollama"
+    embedding_engine: str = "ollama"
+    normalization_engine: str = "ollama"
+    vlm_engine: str = "ollama"
     
     # RAG Workflow Mode: Determines the architectural graph structure.
     # Options:
@@ -110,13 +115,16 @@ def get_config() -> AppConfig:
         main_model = os.getenv("RAG_MAIN_MODEL")
         embed_host = os.getenv("RAG_EMBED_HOST")
         embed_model = os.getenv("RAG_EMBED_MODEL")
-
-
-
-
         if main_host and main_model and embed_host and embed_model:
             _runtime_config.main_model = OllamaConfig(host=main_host, model_name=main_model)
             _runtime_config.embedding_model = OllamaConfig(host=embed_host, model_name=embed_model)
+
+    normalize_host = os.getenv("RAG_NORMALIZATION_HOST")
+    normalize_model = os.getenv("RAG_NORMALIZATION_MODEL")
+    if not _runtime_config.normalization_model and normalize_host and normalize_model:
+        _runtime_config.normalization_model = OllamaConfig(host=normalize_host, model_name=normalize_model)
+    elif not _runtime_config.normalization_model and _runtime_config.main_model:
+        _runtime_config.normalization_model = _runtime_config.main_model
     
     # Always check for RAG_WORKFLOW env var (can be set independently)
     _runtime_config.rag_workflow = os.getenv("RAG_WORKFLOW", _runtime_config.rag_workflow).lower()
@@ -138,6 +146,10 @@ def get_config() -> AppConfig:
     logger.info(f"[CONFIG] get_config() returning use_saml_login={_runtime_config.use_saml_login}")
         
     _runtime_config.reranker_model = os.getenv("RAG_RERANKER_MODEL", _runtime_config.reranker_model)
+    _runtime_config.main_engine = os.getenv("RAG_MAIN_ENGINE", _runtime_config.main_engine).lower()
+    _runtime_config.embedding_engine = os.getenv("RAG_EMBED_ENGINE", _runtime_config.embedding_engine).lower()
+    _runtime_config.normalization_engine = os.getenv("RAG_NORMALIZATION_ENGINE", _runtime_config.normalization_engine).lower()
+    _runtime_config.vlm_engine = os.getenv("RAG_VLM_ENGINE", _runtime_config.vlm_engine).lower()
     
     try:
         _runtime_config.rag_confidence_threshold = float(os.getenv("RAG_CONFIDENCE_THRESHOLD", str(_runtime_config.rag_confidence_threshold)))
@@ -226,6 +238,9 @@ def set_main_model(host: str, model: str):
 
 def set_embedding_model(host: str, model: str):
     _runtime_config.embedding_model = OllamaConfig(host=host, model_name=model)
+
+def set_normalization_model(host: str, model: str):
+    _runtime_config.normalization_model = OllamaConfig(host=host, model_name=model)
 
 def set_rag_workflow(workflow: str):
     """Sets the RAG workflow mode (fused or modular)."""

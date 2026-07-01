@@ -1,55 +1,112 @@
 "use client";
 
-import { useState } from "react";
-import { EmptyState } from "@/components/empty-state";
-import { StatusBadge } from "@/components/status-badge";
-import { useAdminData } from "@/components/use-admin-data";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 import { adminApi } from "@/lib/api";
-import type { AdminDocument, ParseVariant } from "@/lib/types";
+import { compactStatus, formatDate, statusTone } from "@/lib/format";
+import { useAdminData } from "@/components/use-admin-data";
+import { SkeletonRows } from "@/components/loading-state";
+import type { AdminDocument } from "@/lib/types";
 
-function firstCompleteParse(document: AdminDocument): ParseVariant | undefined {
-  return document.parse_variants.find((variant) => variant.status === "COMPLETE");
+function typeLabel(value?: string | null): string {
+  return value === "qna" ? "QnA" : "General";
+}
+
+function bestCompleteVariant(document: AdminDocument) {
+  const parse = document.parse_variants.find((variant) => variant.status === "COMPLETE");
+  const norm = document.parse_variants.flatMap((variant) => variant.norm_variants).find((variant) => variant.status === "COMPLETE");
+  return { parse, norm };
 }
 
 export default function ReviewPage() {
-  const documents = useAdminData(() => adminApi.documents(), 8000);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const reviewable = (documents.data?.items || []).filter((document) =>
-    ["REVIEW_PENDING", "REVIEW_IN_PROGRESS", "PARSE_COMPLETE", "NORMALIZE_COMPLETE", "CHUNK_FAILED"].includes(document.status)
-    || document.parse_variants.some((variant) => variant.status === "FAILED")
+  const documents = useAdminData(() => adminApi.documents(), 0, "documents");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pending = useMemo(
+    () => (documents.data?.items || []).filter((doc) => doc.status === "REVIEW_PENDING" || doc.status === "REVIEW_IN_PROGRESS"),
+    [documents.data]
   );
+  const allSelected = pending.length > 0 && pending.every((doc) => selected.has(doc.document_id));
 
-  async function approve(document: AdminDocument) {
-    const completeParse = firstCompleteParse(document);
-    if (!completeParse) return;
-    const completeNorm = completeParse.norm_variants.find((variant) => variant.status === "COMPLETE") || null;
-    setBusyId(document.document_id);
+  function toggle(documentId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(documentId)) next.delete(documentId);
+      else next.add(documentId);
+      return next;
+    });
+  }
+
+  async function approveOne(document: AdminDocument) {
+    const { parse, norm } = bestCompleteVariant(document);
+    if (!parse) throw new Error(`${document.original_filename} has no completed parser output`);
+    await adminApi.selectVariant(document.document_id, parse.variant_id, norm?.norm_variant_id || null);
+    await adminApi.approve(document.document_id, parse.variant_id, norm?.norm_variant_id || null);
+  }
+
+  async function bulkApprove() {
+    setBusy(true);
+    setError(null);
     try {
-      await adminApi.selectVariant(document.document_id, completeParse.variant_id, completeNorm?.norm_variant_id || null);
-      await adminApi.approve(document.document_id, completeParse.variant_id, completeNorm?.norm_variant_id || null);
+      await adminApi.bulkApprove(Array.from(selected));
+      setSelected(new Set());
       await documents.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Bulk approve failed.");
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
-  async function retryParse(documentId: string, variantId: string) {
-    setBusyId(variantId);
+  async function bulkReject() {
+    const count = selected.size;
+    const confirmed = window.confirm(
+      `Reject ${count} selected document${count === 1 ? "" : "s"}?\n\nRejected documents will not be indexed. Their source files, generated markdown, metadata artifacts, and intermediate outputs will be deleted automatically. The batch history will keep an audit record of the rejection.`
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError(null);
     try {
-      await adminApi.retryParse(documentId, variantId);
+      await adminApi.bulkReject(Array.from(selected), "Rejected from review queue.");
+      setSelected(new Set());
       await documents.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Bulk reject failed.");
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
-  async function retryChunking(documentId: string) {
-    setBusyId(documentId);
+  async function quickApprove(document: AdminDocument) {
+    setBusy(true);
+    setError(null);
     try {
-      await adminApi.retryChunking(documentId);
+      await approveOne(document);
       await documents.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Approve failed.");
     } finally {
-      setBusyId(null);
+      setBusy(false);
+    }
+  }
+
+  async function quickReject(documentId: string) {
+    const document = pending.find((item) => item.document_id === documentId);
+    const confirmed = window.confirm(
+      `Reject "${document?.original_filename || documentId}"?\n\nThis document will not be indexed. Its source file, generated markdown, metadata artifacts, and intermediate outputs will be deleted automatically. The batch history will keep an audit record.`
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await adminApi.reject(documentId, "Rejected from review queue.");
+      await documents.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Reject failed.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -58,75 +115,47 @@ export default function ReviewPage() {
       <div className="page-header">
         <div>
           <h1>Review</h1>
-          <p>Compare parser and normalization variants before approving the markdown for indexing.</p>
+          <p>Approve final markdown for indexing, or reject documents and remove their artifacts before they enter retrieval.</p>
         </div>
-        <button className="button" type="button" onClick={() => void documents.refresh()}>Refresh</button>
+        <div className="actions">
+          <button className="button" type="button" onClick={() => setSelected(allSelected ? new Set() : new Set(pending.map((doc) => doc.document_id)))}>Select all</button>
+          <button className="button primary" type="button" disabled={busy || selected.size === 0} onClick={() => void bulkApprove()}>Approve selected</button>
+          <button className="button danger" type="button" disabled={busy || selected.size === 0} onClick={() => void bulkReject()}>Reject selected</button>
+        </div>
       </div>
+      {error ? <p className="error">{error}</p> : null}
+
       <div className="panel">
-        <h2>Documents Awaiting Review</h2>
-        {reviewable.length === 0 ? (
-          <EmptyState title="No documents ready for review" detail="Completed parse and normalization outputs will appear here." />
-        ) : (
-          <table className="table">
-            <thead><tr><th>Document</th><th>Status</th><th>Variants</th><th>Action</th></tr></thead>
-            <tbody>
-              {reviewable.map((document) => {
-                const completeParse = firstCompleteParse(document);
-                return (
-                  <tr key={document.document_id}>
-                    <td>
-                      {document.original_filename}
-                      {document.error_summary ? <><br /><span className="error">{document.error_summary}</span></> : null}
-                    </td>
-                    <td><StatusBadge status={document.status} /></td>
-                    <td>
-                      <div className="variant-list">
-                        {document.parse_variants.map((variant) => (
-                          <div className="variant-row" key={variant.variant_id}>
-                            <span>{variant.parser_type}</span>
-                            <StatusBadge status={variant.status} />
-                            {variant.status === "FAILED" ? (
-                              <button
-                                className="button"
-                                type="button"
-                                disabled={busyId === variant.variant_id}
-                                onClick={() => void retryParse(document.document_id, variant.variant_id)}
-                              >
-                                Retry Parse
-                              </button>
-                            ) : null}
-                            {variant.norm_variants.map((norm) => (
-                              <span className="muted" key={norm.norm_variant_id}>
-                                {norm.model_config.display_name}: {norm.status}
-                              </span>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="actions">
-                      {document.status === "CHUNK_FAILED" ? (
-                        <button className="button" type="button" disabled={busyId === document.document_id} onClick={() => void retryChunking(document.document_id)}>
-                          Retry Chunking
-                        </button>
-                      ) : null}
-                      <button
-                        className="button primary"
-                        type="button"
-                        disabled={!completeParse || busyId === document.document_id}
-                        onClick={() => void approve(document)}
-                      >
-                        {busyId === document.document_id ? "Working..." : "Approve & Index"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        <h2>Awaiting Review</h2>
+        <div className="stack">
+          {documents.loading && !documents.data ? <SkeletonRows count={6} /> : null}
+          {pending.map((document) => {
+            const { parse, norm } = bestCompleteVariant(document);
+            return (
+              <div className="stack-row row-main" key={document.document_id}>
+                <span>
+                  <span className="row-title">
+                    <input type="checkbox" checked={selected.has(document.document_id)} onChange={() => toggle(document.document_id)} aria-label={`Select ${document.original_filename}`} />
+                    <strong>{document.original_filename}</strong>
+                    <span className="badge info">Batch {document.batch_id.slice(0, 10)}</span>
+                    <span className="badge neutral">{typeLabel(document.ingestion_type || document.effective_config.ingestion_type)}</span>
+                    <span className={`badge ${statusTone(document.status)}`}>{compactStatus(document.status)}</span>
+                  </span>
+                  <div className="row-meta">
+                    Parser {parse?.parser_type || "unknown"} {norm ? `- normalized by ${norm.model_config.display_name}` : "- parsed markdown only"} - uploaded {formatDate(document.uploaded_at)}
+                  </div>
+                </span>
+                <span className="actions">
+                  <Link className="button" href={`/review/${encodeURIComponent(document.document_id)}`} target="_blank">Open</Link>
+                  <button className="button primary" type="button" disabled={busy} onClick={() => void quickApprove(document)}>Approve</button>
+                  <button className="button danger" type="button" disabled={busy} onClick={() => void quickReject(document.document_id)}>Reject</button>
+                </span>
+              </div>
+            );
+          })}
+          {!documents.loading && !pending.length ? <div className="empty-state"><strong>No documents awaiting review</strong><span>Documents will arrive here when a batch requires audit before indexing.</span></div> : null}
+        </div>
       </div>
     </section>
   );
 }
-

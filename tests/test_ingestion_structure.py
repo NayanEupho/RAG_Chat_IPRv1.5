@@ -172,6 +172,21 @@ A: Group A officers are eligible.
     assert "Who is eligible" in chunks[1]["text"]
 
 
+def test_processor_explicit_qna_type_uses_qna_chunker_outside_qna_folder(tmp_path):
+    markdown = tmp_path / "faq.md"
+    markdown.write_text(
+        "Q1: What is LTDP?\nA: It is a training programme.\n\nQ2: Who is eligible?\nA: Group A officers are eligible.",
+        encoding="utf-8",
+    )
+
+    chunks = DocumentProcessor().process_file(str(markdown), mode="markdown", doc_type="qna")
+
+    assert len(chunks) == 2
+    assert all(chunk["metadata"]["doc_type"] == "qna" for chunk in chunks)
+    assert all(chunk["metadata"]["ingestion_type"] == "qna" for chunk in chunks)
+    assert all(chunk["metadata"]["chunk_strategy"] == "qna" for chunk in chunks)
+
+
 def test_doc_id_is_stable_for_absolute_and_relative_paths():
     rel = "upload_docs/General/LeaveAtaGlance.pdf"
     abs_path = os.path.abspath(rel)

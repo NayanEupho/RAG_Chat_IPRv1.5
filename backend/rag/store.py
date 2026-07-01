@@ -146,6 +146,14 @@ class VectorStore:
             self._files_cache = None
         logger.info(f"[STORE] Deleted all embeddings for document_id: {document_id}")
 
+    def delete_legacy_document(self, *, filename: str, source: Optional[str] = None):
+        """Remove chunks for a legacy watcher-ingested document."""
+        where = {"source": source} if source else {"filename": filename}
+        with self.lock:
+            self.collection.delete(where=where)
+            self._files_cache = None
+        logger.info(f"[STORE] Deleted legacy embeddings with filter: {where}")
+
     def clear_all(self):
         """Wipes the entire collection for a complete system reset."""
         with self.lock:

@@ -16,6 +16,7 @@ from backend.config import get_config
 from backend.ingestion.processor import DocumentProcessor
 from backend.rag.store import get_vector_store
 from backend.llm.client import OllamaClientWrapper
+from backend.admin.events import event_hub
 import asyncio
 
 # Logger for tracking file system events and worker status
@@ -152,6 +153,8 @@ class IngestionWorker:
             
             # Async Embedding & Storing
             await self._embed_and_store(chunks)
+            event_hub.publish({"type": "warehouse_update", "action": "index", "origin": "legacy", "filename": filename, "source": file_path})
+            event_hub.publish({"type": "stats_update", "action": "index"})
             logger.info(f"✅ Parallel ingestion complete for {filename}")
             
         except Exception as e:

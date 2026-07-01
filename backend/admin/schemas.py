@@ -7,8 +7,17 @@ from pydantic import BaseModel, Field
 
 
 class ParserType(str, Enum):
+    auto = "auto"
     pymupdf4llm = "pymupdf4llm"
+    pymupdf = "pymupdf"
     docling = "docling"
+    docling_vision = "docling_vision"
+    vision_llm = "vision_llm"
+
+
+class IngestionType(str, Enum):
+    general = "general"
+    qna = "qna"
 
 
 class DocumentStatus(str, Enum):
@@ -24,9 +33,11 @@ class DocumentStatus(str, Enum):
     REVIEW_PENDING = "REVIEW_PENDING"
     REVIEW_IN_PROGRESS = "REVIEW_IN_PROGRESS"
     REVIEW_APPROVED = "REVIEW_APPROVED"
+    REVIEW_REJECTED = "REVIEW_REJECTED"
     CHUNK_PENDING = "CHUNK_PENDING"
     CHUNK_RUNNING = "CHUNK_RUNNING"
     CHUNK_FAILED = "CHUNK_FAILED"
+    CANCELLED = "CANCELLED"
     INDEXED = "INDEXED"
 
 
@@ -41,6 +52,7 @@ class BatchStatus(str, Enum):
     PARTIALLY_COMPLETE = "PARTIALLY_COMPLETE"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class VariantStatus(str, Enum):
@@ -85,12 +97,16 @@ class PerDocConfig(BaseModel):
     parsers: list[ParserType] = Field(default_factory=lambda: [ParserType.docling])
     normalization_enabled: bool = False
     normalization_models: list[NormModelConfig] = Field(default_factory=list)
+    ingestion_type: IngestionType = IngestionType.general
+    review_required: bool = True
 
 
 class BatchConfig(BaseModel):
     default_parsers: list[ParserType] = Field(default_factory=lambda: [ParserType.docling])
     default_normalization_enabled: bool = False
     default_normalization_models: list[NormModelConfig] = Field(default_factory=list)
+    default_ingestion_type: IngestionType = IngestionType.general
+    review_required: bool = True
     per_document_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -98,6 +114,8 @@ class BatchConfigPatch(BaseModel):
     default_parsers: list[ParserType]
     default_normalization_enabled: bool
     default_normalization_models: list[NormModelConfig] = Field(default_factory=list)
+    default_ingestion_type: IngestionType = IngestionType.general
+    review_required: bool = True
     per_document_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -114,6 +132,19 @@ class ApproveReviewRequest(BaseModel):
     selected_parse_variant_id: str
     selected_norm_variant_id: Optional[str] = None
     notes: Optional[str] = None
+
+
+class RejectReviewRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class BulkReviewRequest(BaseModel):
+    document_ids: list[str]
+    notes: Optional[str] = None
+
+
+class BulkDeleteRequest(BaseModel):
+    items: list[dict[str, str]]
 
 
 class TriggerNormalizeRequest(BaseModel):
@@ -134,3 +165,12 @@ class LlmEndpointRequest(BaseModel):
     display_name: str
     enabled: bool = True
 
+
+class VectorProbeRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    candidate_k: int = Field(default=15, ge=1, le=50)
+    rerank: bool = True
+    document_id: Optional[str] = None
+    filename: Optional[str] = None
+    doc_type: Optional[str] = None

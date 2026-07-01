@@ -286,6 +286,7 @@ class DocumentProcessor:
         chunk_overlap: int = 0,
         mode: str = "auto",
         llm_normalize: bool = False,
+        doc_type: Optional[str] = None,
     ) -> List[Dict]:
         """
         Ingests a file, converts it to Markdown, cleans it, and splits it into chunks.
@@ -295,7 +296,7 @@ class DocumentProcessor:
         filename = os.path.basename(file_path)
         ext = os.path.splitext(filename)[1].lower()
         normalized_path = file_path.replace('\\', '/')
-        doc_type = "qna" if "/qna/" in normalized_path.lower() else "general"
+        doc_type = "qna" if str(doc_type or "").lower() == "qna" or "/qna/" in normalized_path.lower() else "general"
         cfg_mode = get_config().parsing_mode
         if mode == "auto" and cfg_mode != "auto":
             mode = "auto" if cfg_mode == "llm" else cfg_mode
@@ -393,7 +394,7 @@ class DocumentProcessor:
                         and docling_diagnostics.broken_table_score < 0.25
                     )
                     quality_issues = (
-                        should_fallback(docling_diagnostics, doc_type="general")
+                        should_fallback(docling_diagnostics, doc_type=doc_type)
                         or (heuristic_issues and not table_structure_good)
                     )
                     
@@ -488,7 +489,6 @@ class DocumentProcessor:
             parser_outputs["llm_normalized"] = md_content
             source_type = f"{source_type}_llm_normalized" if normalization.accepted else source_type
 
-        # --- NEW: Folder-Based Strategy Selection ---
         diagnostics = analyze_markdown(md_content, parser=source_type, source_type=source_type)
         parsed_doc = ParsedDocument(
             file_path=file_path,
@@ -501,15 +501,17 @@ class DocumentProcessor:
             raw_markdown=raw_md_content,
             normalization_manifest=normalization_manifest,
         )
-        if '/qna/' in normalized_path.lower():
-            logger.info(f"Folder-based routing: Treating {filename} as Q&A document.")
+        if doc_type == "qna":
+            logger.info(f"Type-based routing: Treating {filename} as Q&A document.")
             qna_chunks = QnAChunker().chunk(md_content, file_path)
             if qna_chunks:
                 for chunk in qna_chunks:
                     chunk["metadata"].setdefault("parser", source_type)
+                    chunk["metadata"]["ingestion_type"] = "qna"
+                    chunk["metadata"]["chunk_strategy"] = "qna"
                 save_parse_artifacts(parsed_doc, qna_chunks)
                 return qna_chunks
-            logger.info(f"No Q&A patterns found in {filename}, falling back to hierarchical chunking.")
+            logger.info(f"No Q&A patterns found in {filename}, falling back to structure-aware chunking with Q&A metadata.")
 
         base_source_type = source_type.replace("_llm_normalized", "")
         if source_type.endswith("_llm_normalized") and base_source_type in {"docling", "pymupdf", "pymupdf4llm", "docling_vision", "markdown"}:
@@ -547,6 +549,9 @@ class DocumentProcessor:
         
         for chunk in processed_chunks:
             chunk["metadata"].setdefault("parser", source_type)
+            chunk["metadata"]["doc_type"] = doc_type
+            chunk["metadata"]["ingestion_type"] = doc_type
+            chunk["metadata"].setdefault("chunk_strategy", "general")
         save_parse_artifacts(parsed_doc, processed_chunks)
         logger.info(f"Successfully processed {filename} into {len(processed_chunks)} chunks.")
         return processed_chunks

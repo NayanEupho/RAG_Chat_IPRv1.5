@@ -34,8 +34,9 @@ def generated_root() -> Path:
     return root
 
 
-def document_root(batch_id: str, document_id: str) -> Path:
-    root = files_root() / "batches" / batch_id / "documents" / document_id
+def document_root(batch_id: str, document_id: str, ingestion_type: str = "general") -> Path:
+    type_folder = "QnA" if str(ingestion_type).lower() == "qna" else "General"
+    root = files_root() / type_folder / "batches" / batch_id / "documents" / document_id
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -48,14 +49,15 @@ def ensure_inside_admin_data(path: str | Path) -> Path:
     return resolved
 
 
-async def save_source_upload(batch_id: str, upload: UploadFile, config: dict) -> dict:
+async def save_source_upload(batch_id: str, upload: UploadFile, config: dict, ingestion_type: str = "general") -> dict:
     filename = safe_name(upload.filename or "document")
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_SOURCE_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Only PDF and DOCX files are supported")
 
     document_id = new_id("doc")
-    target_dir = document_root(batch_id, document_id) / "source"
+    normalized_type = "qna" if str(ingestion_type).lower() == "qna" else "general"
+    target_dir = document_root(batch_id, document_id, normalized_type) / "source"
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / filename
     size = 0
@@ -76,7 +78,7 @@ async def save_source_upload(batch_id: str, upload: UploadFile, config: dict) ->
         "source_file_path": str(target_path),
         "file_type": ext.lstrip("."),
         "file_size_bytes": size,
-        "effective_config": config,
+        "effective_config": {**config, "ingestion_type": normalized_type},
     }
 
 
@@ -133,6 +135,15 @@ def copy_to_review_approved(batch_id: str, document_id: str, source_path: str) -
 
 def copy_text_to_review_approved(batch_id: str, document_id: str, content: str) -> str:
     return write_text(review_dir(batch_id, document_id) / "approved.md", content)
+
+
+def delete_document_source_tree(source_file_path: str) -> None:
+    try:
+        source = ensure_inside_admin_data(source_file_path)
+    except HTTPException:
+        return
+    document_dir = source.parent.parent
+    delete_tree(document_dir)
 
 
 def delete_tree(path: str | Path) -> None:

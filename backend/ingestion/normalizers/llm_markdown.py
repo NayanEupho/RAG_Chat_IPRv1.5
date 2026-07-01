@@ -101,8 +101,9 @@ class LlmMarkdownNormalizer:
 
     def normalize(self, markdown: str, *, filename: str, doc_type: str, parser: str) -> NormalizationResult:
         cfg = get_config()
-        if not cfg.main_model:
-            raise ValueError("Main model is not configured; cannot run LLM normalization")
+        normalization_model = cfg.normalization_model or cfg.main_model
+        if not normalization_model:
+            raise ValueError("LLM normalization model is not configured; cannot run LLM normalization")
 
         raw = markdown or ""
         batches = self._make_batches(raw)
@@ -110,7 +111,7 @@ class LlmMarkdownNormalizer:
         batch_manifests = []
         previous_tail = ""
 
-        client = self.client_factory(host=cfg.main_model.host)
+        client = self.client_factory(host=normalization_model.host)
         rules = QNA_NORMALIZATION_RULES if doc_type == "qna" else GENERAL_NORMALIZATION_RULES
 
         for idx, batch_text in enumerate(batches, start=1):
@@ -124,9 +125,9 @@ class LlmMarkdownNormalizer:
                 previous_tail=previous_tail,
                 batch_text=batch_text,
             )
-            logger.info("[NORMALIZE] Normalizing %s batch %s/%s with %s", filename, idx, len(batches), cfg.main_model.model_name)
+            logger.info("[NORMALIZE] Normalizing %s batch %s/%s with %s", filename, idx, len(batches), normalization_model.model_name)
             response = client.chat(
-                model=cfg.main_model.model_name,
+                model=normalization_model.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 stream=False,
                 think=False,
@@ -158,8 +159,8 @@ class LlmMarkdownNormalizer:
             "status": "accepted" if accepted else "rejected_fallback_to_raw",
             "source_parser": parser,
             "doc_type": doc_type,
-            "model": cfg.main_model.model_name,
-            "host": cfg.main_model.host,
+            "model": normalization_model.model_name,
+            "host": normalization_model.host,
             "raw_char_count": len(raw),
             "normalized_char_count": len(stitched),
             "raw_word_count": self._word_count(raw),

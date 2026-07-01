@@ -40,7 +40,7 @@ ENV/
 chroma_db/
 rag_chat_sessions.db*
 upload_docs/*
-generated_docs_md/*
+generated_doc_md/*
 !upload_docs/.gitkeep
 *.txt
 *.log
