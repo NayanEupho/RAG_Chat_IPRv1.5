@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { ChunkRecord, VectorProbeChunk } from "@/lib/types";
 
 type ChunkLike = ChunkRecord | VectorProbeChunk;
@@ -35,7 +36,22 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
-export function ChunkCard({ chunk, active = false, label }: { chunk: ChunkLike; active?: boolean; label?: string }) {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightedText(value: string, term?: string): ReactNode {
+  const needle = term?.trim();
+  if (!needle) return value;
+  const matcher = new RegExp(`(${escapeRegExp(needle)})`, "gi");
+  return value.split(matcher).map((part, index) => (
+    part.toLowerCase() === needle.toLowerCase()
+      ? <mark className="search-highlight" key={`${part}-${index}`}>{part}</mark>
+      : part
+  ));
+}
+
+export function ChunkCard({ chunk, active = false, label, highlightTerm }: { chunk: ChunkLike; active?: boolean; label?: string; highlightTerm?: string }) {
   const metadata = metadataFor(chunk);
   const content = contentFor(chunk);
   const similarity = "similarity" in chunk ? score(chunk.similarity) : null;
@@ -59,7 +75,7 @@ export function ChunkCard({ chunk, active = false, label }: { chunk: ChunkLike; 
         <span><strong>Chars</strong>{"char_count" in chunk ? chunk.char_count : content.length}</span>
         <span><strong>Section</strong>{String(metadata.section_path || "Not recorded")}</span>
       </div>
-      <pre className="chunk-content">{content}</pre>
+      <pre className="chunk-content">{highlightedText(content, highlightTerm)}</pre>
       <details className="metadata-drawer">
         <summary>Metadata</summary>
         <pre>{JSON.stringify(metadata, null, 2)}</pre>

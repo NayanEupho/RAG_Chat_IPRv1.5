@@ -5,8 +5,14 @@ import sqlite3
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 def admin_data_dir() -> Path:
-    return Path(os.getenv("ADMIN_DASHBOARD_DATA_DIR", "admin_data")).resolve()
+    configured = Path(os.getenv("ADMIN_DASHBOARD_DATA_DIR", "admin_data"))
+    if configured.is_absolute():
+        return configured.resolve()
+    return (PROJECT_ROOT / configured).resolve()
 
 
 def admin_db_path() -> Path:
@@ -20,6 +26,33 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+def _migrate_dashboard_local_admin_users(conn: sqlite3.Connection) -> None:
+    if os.getenv("ADMIN_DASHBOARD_DATA_DIR"):
+        return
+    legacy_db = PROJECT_ROOT / "Admin_Dashboard" / "admin_data" / "admin.db"
+    if not legacy_db.exists() or legacy_db.resolve() == admin_db_path().resolve():
+        return
+    source = sqlite3.connect(legacy_db)
+    source.row_factory = sqlite3.Row
+    try:
+        table = source.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'admin_users'"
+        ).fetchone()
+        if not table:
+            return
+        rows = source.execute("SELECT email, password_hash, created_at, updated_at FROM admin_users").fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO admin_users (email, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (row["email"], row["password_hash"], row["created_at"], row["updated_at"]),
+            )
+    finally:
+        source.close()
 
 
 def init_admin_db() -> None:
@@ -233,11 +266,19 @@ def init_admin_db() -> None:
                 value_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS admin_users (
+                email TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(admin_reviews)").fetchall()}
         if "review_action_json" not in columns:
             conn.execute("ALTER TABLE admin_reviews ADD COLUMN review_action_json TEXT")
+        _migrate_dashboard_local_admin_users(conn)
         conn.commit()
     finally:
         conn.close()

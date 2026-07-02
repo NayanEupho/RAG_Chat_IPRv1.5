@@ -146,7 +146,7 @@ def _delete_legacy_artifacts(match: dict[str, Any]) -> list[str]:
     return deleted
 
 
-def _fetch_chroma_metadatas(limit: int = 5000) -> list[dict[str, Any]]:
+def _fetch_chroma_metadatas(limit: int = 5000) -> list[dict[str, Any]] | None:
     try:
         from backend.rag.store import get_vector_store
 
@@ -167,7 +167,7 @@ def _fetch_chroma_metadatas(limit: int = 5000) -> list[dict[str, Any]]:
             offset += page_size
         return metadatas[:limit]
     except Exception:
-        return []
+        return None
 
 
 def legacy_indexed_documents(*, force_refresh: bool = False) -> list[dict[str, Any]]:
@@ -177,8 +177,12 @@ def legacy_indexed_documents(*, force_refresh: bool = False) -> list[dict[str, A
 
     admin_ids = {item["document_id"] for item in repo.list_indexed_document_summaries(limit=10000)}
     artifact_index = _legacy_artifact_index()
+    metadatas = _fetch_chroma_metadatas()
+    if metadatas is None:
+        return list(_legacy_cache["items"])
+
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    for meta in _fetch_chroma_metadatas():
+    for meta in metadatas:
         if meta.get("document_id") in admin_ids:
             continue
         filename = str(meta.get("filename") or os.path.basename(str(meta.get("source") or "")) or "Unknown")

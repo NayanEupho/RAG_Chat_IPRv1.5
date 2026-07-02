@@ -9,14 +9,33 @@ import { SkeletonRows } from "@/components/loading-state";
 import { ChunkCard } from "@/components/chunk-card";
 import type { ChunkRecord, IndexedWarehouseDocument } from "@/lib/types";
 
+type ChunkSearchMode = "current" | "document";
+
 function docTypeLabel(value?: string | null) {
   return value === "qna" ? "QnA" : "General";
+}
+
+function countMatches(value: string, term: string): number {
+  const needle = term.trim().toLowerCase();
+  if (!needle) return 0;
+  let count = 0;
+  let start = 0;
+  const haystack = value.toLowerCase();
+  while (start < haystack.length) {
+    const index = haystack.indexOf(needle, start);
+    if (index === -1) break;
+    count += 1;
+    start = index + Math.max(needle.length, 1);
+  }
+  return count;
 }
 
 export default function ChunksPage() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [chunkSearch, setChunkSearch] = useState("");
+  const [debouncedChunkSearch, setDebouncedChunkSearch] = useState("");
+  const [chunkSearchMode, setChunkSearchMode] = useState<ChunkSearchMode>("current");
   const [activeIndex, setActiveIndex] = useState(0);
   const documents = useAdminData(() => adminApi.indexedDocuments(), 0, "indexedDocuments");
   const docs = documents.data?.items || [];
@@ -25,6 +44,7 @@ export default function ChunksPage() {
     [docs, search]
   );
   const selected = docs.find((item) => item.id === selectedId) || filteredDocs[0] || null;
+  const documentSearchTerm = chunkSearchMode === "document" ? debouncedChunkSearch : "";
   const chunkQuery = useMemo(() => {
     if (!selected) return "";
     const filters = new URLSearchParams();
@@ -36,25 +56,35 @@ export default function ChunksPage() {
       if (selected.source_path) filters.set("source", selected.source_path);
     }
     if (selected.doc_type) filters.set("doc_type", selected.doc_type);
-    if (chunkSearch) filters.set("search", chunkSearch);
+    if (documentSearchTerm) filters.set("search", documentSearchTerm);
     return `&${filters.toString()}`;
-  }, [chunkSearch, selected]);
+  }, [documentSearchTerm, selected]);
   const chunks = useAdminData(
     () => selected ? adminApi.chunks(chunkQuery) : Promise.resolve({ items: [], total: 0, page: 1 }),
     0,
-    selected ? `chunks:${selected.id}:${chunkSearch}` : "chunks:none",
-    Boolean(selected)
+    selected ? `chunks:${selected.id}:${chunkSearchMode}:${documentSearchTerm}` : "chunks:none",
+    Boolean(selected),
+    true
   );
   const chunkItems = chunks.data?.items || [];
   const activeChunk = chunkItems[Math.min(activeIndex, Math.max(chunkItems.length - 1, 0))] as ChunkRecord | undefined;
+  const activeContent = activeChunk?.content || "";
+  const activeMatchCount = countMatches(activeContent, chunkSearch);
 
   useEffect(() => {
     if (!selectedId && filteredDocs[0]?.id) setSelectedId(filteredDocs[0].id);
   }, [filteredDocs, selectedId]);
 
   useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedChunkSearch(chunkSearch.trim());
+    }, chunkSearchMode === "document" ? 220 : 0);
+    return () => window.clearTimeout(handle);
+  }, [chunkSearch, chunkSearchMode]);
+
+  useEffect(() => {
     setActiveIndex(0);
-  }, [selected?.id, chunkSearch]);
+  }, [documentSearchTerm, selected?.id, chunkSearchMode]);
 
   useEffect(() => {
     function handleKey(event: KeyboardEvent) {
@@ -128,11 +158,31 @@ export default function ChunksPage() {
           </div>
           <div className="field">
             <label htmlFor="chunk-search">Search within chunks</label>
+            <div className="tab-row search-mode-row" role="group" aria-label="Chunk search scope">
+              <button
+                className={chunkSearchMode === "current" ? "active" : ""}
+                type="button"
+                onClick={() => setChunkSearchMode("current")}
+              >
+                Current chunk
+              </button>
+              <button
+                className={chunkSearchMode === "document" ? "active" : ""}
+                type="button"
+                onClick={() => setChunkSearchMode("document")}
+              >
+                This document
+              </button>
+            </div>
             <input id="chunk-search" value={chunkSearch} onChange={(event) => setChunkSearch(event.target.value)} placeholder="Search chunk text" />
-            <span className="muted">Use left/right arrows or A/D to browse cards.</span>
+            <span className="muted">
+              {chunkSearchMode === "current"
+                ? `${activeMatchCount} matches in current chunk. Use left/right arrows or A/D to browse cards.`
+                : `${chunkItems.length} matching chunks loaded for this document.`}
+            </span>
           </div>
           {chunks.loading && !chunks.data ? <SkeletonRows count={4} /> : null}
-          {activeChunk ? <ChunkCard chunk={activeChunk} active label={`${activeIndex + 1} of ${chunkItems.length}`} /> : null}
+          {activeChunk ? <ChunkCard chunk={activeChunk} active label={`${activeIndex + 1} of ${chunkItems.length}`} highlightTerm={chunkSearch} /> : null}
           {!chunks.loading && selected && !chunkItems.length ? <div className="empty-state"><strong>No chunks found</strong><span>This document may have been indexed before admin chunk mirroring was enabled, or the search has no matches.</span></div> : null}
         </div>
       </div>

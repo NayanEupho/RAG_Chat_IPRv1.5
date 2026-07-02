@@ -46,8 +46,8 @@ export function setAdminDataCache<T>(key: string, data: T): void {
   }
 }
 
-export async function prefetchAdminData<T>(key: string, loader: () => Promise<T>): Promise<void> {
-  if (freshCached<T>(key)) return;
+export async function prefetchAdminData<T>(key: string, loader: () => Promise<T>, force = false): Promise<void> {
+  if (!force && freshCached<T>(key)) return;
   if (inflight.has(key)) {
     await inflight.get(key);
     return;
@@ -80,13 +80,20 @@ function freshCached<T>(key?: string): T | null {
   return record.data as T;
 }
 
-export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, cacheKey?: string, enabled = true): DataState<T> {
+export function useAdminData<T>(
+  loader: () => Promise<T>,
+  intervalMs = 10000,
+  cacheKey?: string,
+  enabled = true,
+  keepPreviousData = false
+): DataState<T> {
   const [data, setData] = useState<T | null>(() => (enabled ? freshCached<T>(cacheKey) : null));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(enabled && !freshCached<T>(cacheKey));
   const loaderRef = useRef(loader);
   const keyRef = useRef(cacheKey);
   const enabledRef = useRef(enabled);
+  const keepPreviousDataRef = useRef(keepPreviousData);
 
   useEffect(() => {
     loaderRef.current = loader;
@@ -100,6 +107,10 @@ export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, ca
     enabledRef.current = enabled;
   }, [enabled]);
 
+  useEffect(() => {
+    keepPreviousDataRef.current = keepPreviousData;
+  }, [keepPreviousData]);
+
   const refresh = useCallback(async () => {
     if (!enabledRef.current) {
       setLoading(false);
@@ -110,7 +121,7 @@ export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, ca
       const key = keyRef.current;
       const next = key
         ? await (async () => {
-            await prefetchAdminData(key, loaderRef.current);
+            await prefetchAdminData(key, loaderRef.current, true);
             const record = cache.get(key);
             return record?.data as T;
           })()
@@ -133,7 +144,7 @@ export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, ca
       setData(cached);
       setLoading(false);
     } else {
-      setData(null);
+      if (!keepPreviousDataRef.current) setData(null);
       setLoading(true);
       void refresh();
     }
@@ -150,7 +161,7 @@ export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, ca
     function handleInvalidated(event: Event) {
       const keys = (event as CustomEvent<InvalidationDetail>).detail?.keys;
       if (!cacheKey || matchesInvalidation(cacheKey, keys)) {
-        setData(null);
+        if (!keepPreviousDataRef.current) setData(null);
         setLoading(true);
         void refresh();
       }
@@ -165,7 +176,7 @@ export function useAdminData<T>(loader: () => Promise<T>, intervalMs = 10000, ca
       window.removeEventListener(INVALIDATED_EVENT, handleInvalidated);
       if (handle) window.clearInterval(handle);
     };
-  }, [cacheKey, enabled, intervalMs, refresh]);
+  }, [cacheKey, enabled, intervalMs, keepPreviousData, refresh]);
 
   return { data, error, loading, refresh };
 }

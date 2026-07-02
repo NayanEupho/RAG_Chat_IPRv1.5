@@ -77,6 +77,135 @@ def test_admin_health_endpoint_is_lightweight_and_reports_ready_database(isolate
     assert isinstance(payload["latency_ms"], int)
 
 
+def test_admin_data_dir_default_is_project_root_stable(monkeypatch):
+    from backend.admin import db as db_module
+
+    monkeypatch.delenv("ADMIN_DASHBOARD_DATA_DIR", raising=False)
+    monkeypatch.chdir(db_module.PROJECT_ROOT / "Admin_Dashboard")
+
+    assert db_module.admin_data_dir() == (db_module.PROJECT_ROOT / "admin_data").resolve()
+
+
+def test_admin_db_migrates_users_from_dashboard_local_db(tmp_path, monkeypatch):
+    import sqlite3
+
+    from backend.admin import db as db_module
+    from backend.admin.auth import authenticate_admin, hash_password
+
+    monkeypatch.delenv("ADMIN_DASHBOARD_DATA_DIR", raising=False)
+    monkeypatch.setattr(db_module, "PROJECT_ROOT", tmp_path)
+    legacy = tmp_path / "Admin_Dashboard" / "admin_data" / "admin.db"
+    legacy.parent.mkdir(parents=True)
+    conn = sqlite3.connect(legacy)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE admin_users (
+                email TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO admin_users VALUES (?, ?, ?, ?)",
+            ("migrated@example.com", hash_password("pw"), "created", "updated"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db_module.init_admin_db()
+
+    assert authenticate_admin("migrated@example.com", "pw") is not None
+
+
+def test_admin_user_store_hashes_and_authenticates_password(isolated_admin):
+    from backend.admin.auth import add_admin_user, authenticate_admin, list_admin_users, remove_admin_user
+    from backend.admin.db import get_connection
+
+    add_admin_user("Admin@Example.COM ", "correct-password")
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT email, password_hash FROM admin_users WHERE email = ?", ("admin@example.com",)).fetchone()
+    finally:
+        conn.close()
+
+    assert row["email"] == "admin@example.com"
+    assert row["password_hash"] != "correct-password"
+    assert authenticate_admin("admin@example.com", "correct-password")["email"] == "admin@example.com"
+    assert authenticate_admin("admin@example.com", "wrong-password") is None
+    assert [user["email"] for user in list_admin_users()] == ["admin@example.com"]
+    assert remove_admin_user("admin@example.com") is True
+    assert authenticate_admin("admin@example.com", "correct-password") is None
+
+
+def test_admin_login_endpoint_accepts_correct_password(isolated_admin):
+    from backend.admin.auth import add_admin_user
+    from backend.admin.router import router
+
+    add_admin_user("admin@example.com", "pw123")
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    client = TestClient(app)
+
+    ok_response = client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "pw123"})
+    bad_response = client.post("/api/v1/auth/login", json={"email": "admin@example.com", "password": "bad"})
+
+    assert ok_response.status_code == 200
+    assert ok_response.json()["data"] == {"authenticated": True, "email": "admin@example.com"}
+    assert bad_response.status_code == 401
+
+
+def test_admin_login_sees_user_added_after_app_is_running(isolated_admin):
+    from backend.admin.auth import add_admin_user
+    from backend.admin.router import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    client = TestClient(app)
+
+    before = client.post("/api/v1/auth/login", json={"email": "late@example.com", "password": "pw"})
+    add_admin_user("late@example.com", "pw")
+    after = client.post("/api/v1/auth/login", json={"email": "late@example.com", "password": "pw"})
+
+    assert before.status_code == 401
+    assert after.status_code == 200
+    assert after.json()["data"]["authenticated"] is True
+
+
+def test_add_admin_cli_lists_and_removes_users(isolated_admin, capsys):
+    from Admin_Dashboard import add_admin
+
+    assert add_admin.main(["add", "cli@example.com", "pw"]) == 0
+    assert "Admin saved: cli@example.com" in capsys.readouterr().out
+
+    assert add_admin.main(["list"]) == 0
+    assert "cli@example.com" in capsys.readouterr().out
+
+    assert add_admin.main(["remove", "cli@example.com"]) == 0
+    assert "Removed: cli@example.com" in capsys.readouterr().out
+
+
+def test_add_admin_cli_defaults_to_interactive_shell(isolated_admin, monkeypatch, capsys):
+    from Admin_Dashboard import add_admin
+    from backend.admin.auth import authenticate_admin
+
+    answers = iter(["add", "interactive@example.com", "list", "quit"])
+    passwords = iter(["pw", "pw"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(add_admin.getpass, "getpass", lambda prompt="": next(passwords))
+
+    assert add_admin.main([]) == 0
+
+    output = capsys.readouterr().out
+    assert "RAG Admin user manager" in output
+    assert "Admin saved: interactive@example.com" in output
+    assert authenticate_admin("interactive@example.com", "pw") is not None
+
+
 def _create_document(tmp_path: Path, *, batch_id: str = "batch_test", document_id: str = "doc_test"):
     source = tmp_path / "upload_docs" / "Admin_Dashboard" / "sample.pdf"
     source.parent.mkdir(parents=True, exist_ok=True)

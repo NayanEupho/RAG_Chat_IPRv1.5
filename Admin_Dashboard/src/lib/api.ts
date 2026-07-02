@@ -20,7 +20,31 @@ interface ApiEnvelope<T> {
   detail?: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_ADMIN_API_BASE || "http://localhost:8000/api/v1";
+const CONFIGURED_API_BASE = process.env.NEXT_PUBLIC_ADMIN_API_BASE || "";
+const FALLBACK_API_BASE = "/api/admin-backend";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
+
+function isLoopbackHost(hostname: string): boolean {
+  return LOOPBACK_HOSTS.has(hostname.toLowerCase());
+}
+
+function resolveAdminApiBase(): string {
+  const configured = CONFIGURED_API_BASE || FALLBACK_API_BASE;
+  if (typeof window === "undefined") return configured.replace(/\/$/, "");
+  try {
+    const url = new URL(configured, window.location.origin);
+    const frontendHost = window.location.hostname;
+    const apiHostIsListenAddress = url.hostname === "0.0.0.0";
+    const apiHostIsLocalOnly = isLoopbackHost(url.hostname);
+    const frontendIsRemote = !isLoopbackHost(frontendHost);
+    if (apiHostIsListenAddress || (apiHostIsLocalOnly && frontendIsRemote)) {
+      url.hostname = frontendHost;
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return configured.replace(/\/$/, "");
+  }
+}
 
 export interface AdminHealth {
   healthy: boolean;
@@ -31,8 +55,13 @@ export interface AdminHealth {
   error?: string;
 }
 
+export interface AdminLoginResult {
+  authenticated: boolean;
+  email: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${resolveAdminApiBase()}${path}`, {
     ...init,
     cache: "no-store"
   });
@@ -48,6 +77,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const adminApi = {
+  login: (payload: { email: string; password: string }) =>
+    request<AdminLoginResult>("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   health: (signal?: AbortSignal) => request<AdminHealth>("/health", { signal }),
   stats: () => request<AdminStats>("/stats"),
   runtimeConfig: () => request<RuntimeConfig>("/runtime-config"),
@@ -156,9 +191,9 @@ export const adminApi = {
 };
 
 export function adminEventsUrl(): string {
-  return `${API_BASE}/events`;
+  return `${resolveAdminApiBase()}/events`;
 }
 
 export function adminApiBaseUrl(): string {
-  return API_BASE;
+  return resolveAdminApiBase();
 }

@@ -192,11 +192,26 @@ a {
   gap: 12px;
 }
 
-.gate-brand span {
+.gate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.gate-brand > div span {
   display: block;
   margin-top: 2px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.gate-brand .brand-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  margin: 0;
+  color: var(--accent-dark);
 }
 
 .gate-orbit {
@@ -266,6 +281,114 @@ a {
   margin: 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.login-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 248, 0.96), rgba(244, 241, 234, 0.98)),
+    radial-gradient(circle at 50% 30%, rgba(126, 173, 53, 0.14), transparent 34%);
+}
+
+.login-panel {
+  display: grid;
+  width: min(440px, 100%);
+  gap: 22px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.94);
+  box-shadow: var(--shadow);
+}
+
+.login-panel h1 {
+  margin: 0 0 8px;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.login-panel p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 44px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.eye-icon,
+.bell-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.login-error {
+  padding: 10px 12px;
+  border: 1px solid rgba(180, 35, 24, 0.24);
+  border-radius: 7px;
+  background: #fde8e7;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.admin-identity {
+  display: block;
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 36px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
 }
 
 .gate-steps {
@@ -1040,6 +1163,17 @@ a {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.search-highlight {
+  border-radius: 3px;
+  background: #fff08a;
+  color: #171717;
+  padding: 0 1px;
+}
+
+.search-mode-row {
+  margin-bottom: 8px;
 }
 
 .metadata-drawer summary {

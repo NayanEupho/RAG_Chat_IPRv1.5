@@ -91,6 +91,8 @@ function modelStatusLabel(status?: string): string {
 export default function OverviewPage() {
   const [dismissedErrorIds, setDismissedErrorIds] = useState<Set<string>>(new Set());
   const [dismissedBatchIds, setDismissedBatchIds] = useState<Set<string>>(new Set());
+  const [warehouseRetryCount, setWarehouseRetryCount] = useState(0);
+  const [startupRefreshDone, setStartupRefreshDone] = useState(false);
   const events = useAdminEvents();
   const stats = useAdminData(() => adminApi.stats(), 0, "stats");
   const batches = useAdminData(() => adminApi.batches(), 0, "batches");
@@ -113,11 +115,36 @@ export default function OverviewPage() {
   );
   const backendLoading = events.status === "connecting" || events.status === "reconnecting";
   const backendDown = events.status === "down";
+  const retrievalChunks = stats.data?.retrieval_chunks ?? stats.data?.chroma_count ?? stats.data?.chunks ?? 0;
+  const warehouseLooksStale = !backendLoading && !backendDown && !indexed.loading && (indexed.data?.total ?? 0) === 0 && retrievalChunks > 0;
+  const warehouseReconciling = warehouseLooksStale && warehouseRetryCount < 4;
 
   useEffect(() => {
     setDismissedErrorIds(readDismissedSet(DISMISSED_OVERVIEW_ERRORS_KEY));
     setDismissedBatchIds(readDismissedSet(DISMISSED_OVERVIEW_BATCHES_KEY));
   }, []);
+
+  useEffect(() => {
+    if (events.status !== "live" || startupRefreshDone) return;
+    const handle = window.setTimeout(() => {
+      setStartupRefreshDone(true);
+      void Promise.allSettled([stats.refresh(), indexed.refresh()]);
+    }, 450);
+    return () => window.clearTimeout(handle);
+  }, [events.status, indexed.refresh, startupRefreshDone, stats.refresh]);
+
+  useEffect(() => {
+    if (!warehouseLooksStale) {
+      setWarehouseRetryCount(0);
+      return;
+    }
+    if (warehouseRetryCount >= 4) return;
+    const handle = window.setTimeout(() => {
+      setWarehouseRetryCount((current) => current + 1);
+      void indexed.refresh();
+    }, 650);
+    return () => window.clearTimeout(handle);
+  }, [indexed.refresh, warehouseLooksStale, warehouseRetryCount]);
 
   function clearOverviewErrors() {
     const ids = new Set([...(logs.data?.items || []).map((log) => log.log_id), ...dismissedErrorIds]);
@@ -147,7 +174,7 @@ export default function OverviewPage() {
       {backendDown ? <BackendStatusPanel status={events.status} error={events.lastError} since={events.disconnectedSince} /> : null}
 
       <div className="grid cols-4">
-        {backendLoading || ((stats.loading || indexed.loading || batches.loading || review.loading) && !stats.data && !indexed.data) ? (
+        {backendLoading || warehouseReconciling || ((stats.loading || indexed.loading || batches.loading || review.loading) && !stats.data && !indexed.data) ? (
           <SkeletonStats count={4} />
         ) : backendDown ? null : (
           <>
@@ -171,6 +198,13 @@ export default function OverviewPage() {
         )}
       </div>
 
+      {warehouseLooksStale && warehouseRetryCount >= 4 ? (
+        <div className="panel backend-state warning">
+          <h2>Warehouse inventory is still warming</h2>
+          <p>The vector store reports {retrievalChunks} chunks, but the indexed document inventory is still empty. The dashboard will avoid showing this as a real zero until the warehouse endpoint returns document rows.</p>
+        </div>
+      ) : null}
+
       <div className="grid cols-2">
         <div className="panel">
           <h2>Retrieval Footprint</h2>
@@ -183,7 +217,7 @@ export default function OverviewPage() {
               <>
                 <div className="stat">
                   <MetricLabel label="Chunks" title="Chunks">Vector-store chunk count used by retrieval. This is the closest number to the searchable retrieval footprint.</MetricLabel>
-                  <strong>{stats.data?.retrieval_chunks ?? stats.data?.chroma_count ?? stats.data?.chunks ?? 0}</strong>
+                  <strong>{retrievalChunks}</strong>
                 </div>
                 <div className="stat">
                   <MetricLabel label="Source files" title="Source files">Filesystem count of uploaded source documents under configured source roots. It can be higher or lower than indexed documents because drafts, rejected history, legacy files, and non-indexed files may exist.</MetricLabel>

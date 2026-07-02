@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.admin.db import get_connection
 from backend.admin import files
+from backend.admin.auth import authenticate_admin, normalize_email
 from backend.admin.events import event_hub
 from backend.admin.inventory import inventory_summary, iter_generated_chunks, list_artifact_runs, list_generated_files, list_source_files
 from backend.admin.repository import new_id, repo
@@ -22,6 +23,7 @@ from backend.admin import warehouse
 from backend.admin.chunk_inventory import list_chroma_chunks
 from backend.admin.schemas import (
     ApproveReviewRequest,
+    AdminLoginRequest,
     BatchConfig,
     BatchConfigPatch,
     BatchStatus,
@@ -63,6 +65,14 @@ def _model_health_ttl_seconds() -> float:
         return max(5.0, float(os.getenv("ADMIN_MODEL_HEALTH_TTL_SECONDS", "45")))
     except ValueError:
         return 45.0
+
+
+@router.post("/auth/login")
+def admin_login(payload: AdminLoginRequest):
+    user = authenticate_admin(payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid admin email or password")
+    return ok({"authenticated": True, "email": normalize_email(payload.email)})
 
 
 def _model_health_cache_key(model, engine: str) -> tuple[str, str]:

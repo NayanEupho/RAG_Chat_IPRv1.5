@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { adminApi, adminApiBaseUrl, adminEventsUrl, type AdminHealth } from "@/lib/api";
+import { clearAdminSession, readAdminSession, saveAdminSession, type AdminSession } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
 import { invalidateAdminData, prefetchAdminData, setAdminDataCache, useAdminData } from "./use-admin-data";
 import { useAdminEvents } from "./use-admin-events";
@@ -51,6 +52,15 @@ function BellIcon() {
     <svg aria-hidden="true" className="bell-icon" viewBox="0 0 24 24">
       <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
       <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+    </svg>
+  );
+}
+
+function EyeIcon({ open }: { open: boolean }) {
+  return (
+    <svg aria-hidden="true" className="eye-icon" viewBox="0 0 24 24">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+      {open ? <circle cx="12" cy="12" r="3" /> : <path d="M4 4l16 16" />}
     </svg>
   );
 }
@@ -204,10 +214,14 @@ function prefetchDataForRoute(href: string) {
 
 function ConnectionGate({
   gate,
-  events
+  events,
+  adminEmail,
+  onLogout
 }: {
   gate: ReturnType<typeof useBackendGate>;
   events: ReturnType<typeof useAdminEvents>;
+  adminEmail?: string | null;
+  onLogout?: () => void;
 }) {
   const httpReady = gate.status === "ready";
   const streamReady = events.status === "live";
@@ -221,12 +235,15 @@ function ConnectionGate({
   return (
     <main className="connection-gate" aria-busy={!httpReady || !streamReady}>
       <section className="connection-gate-card">
-        <div className="gate-brand">
-          <span className="brand-mark">IPR</span>
-          <div>
-            <strong>RAG Admin</strong>
-            <span>Connection verification</span>
+        <div className="gate-header">
+          <div className="gate-brand">
+            <span className="brand-mark">IPR</span>
+            <div>
+              <strong>RAG Admin</strong>
+              <span>{adminEmail || "Connection verification"}</span>
+            </div>
           </div>
+          {onLogout ? <button className="button" type="button" onClick={onLogout}>Logout</button> : null}
         </div>
         <div className="gate-orbit" aria-hidden="true">
           <span />
@@ -274,25 +291,111 @@ function ConnectionGate({
     </main>
   );
 }
+function LoginScreen({ onLogin }: { onLogin: (session: AdminSession) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await adminApi.login({ email, password });
+      if (!result.authenticated) throw new Error("Invalid admin email or password");
+      onLogin(saveAdminSession(result.email));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Login failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="login-screen">
+      <section className="login-panel">
+        <div className="gate-brand">
+          <span className="brand-mark">IPR</span>
+          <div>
+            <strong>RAG Admin</strong>
+            <span>Ingestion dashboard</span>
+          </div>
+        </div>
+        <div>
+          <h1>Admin Login</h1>
+          <p>Use the admin email and password configured on this machine.</p>
+        </div>
+        <form className="login-form" onSubmit={submit}>
+          <div className="field">
+            <label htmlFor="admin-email">Email</label>
+            <input
+              id="admin-email"
+              autoComplete="email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="admin@example.com"
+              required
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="admin-password">Password</label>
+            <div className="password-field">
+              <input
+                id="admin-password"
+                autoComplete="current-password"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter password"
+                required
+              />
+              <button
+                className="password-toggle"
+                type="button"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                title={showPassword ? "Hide password" : "Show password"}
+              >
+                <EyeIcon open={showPassword} />
+              </button>
+            </div>
+          </div>
+          {error ? <div className="login-error">{error}</div> : null}
+          <button className="button primary" type="submit" disabled={submitting || !email.trim() || !password}>
+            {submitting ? "Checking" : "Login"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const gate = useBackendGate();
+  const [session, setSession] = useState<AdminSession>({ email: null, isAuthenticated: false, isLoading: true });
   const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alertRefreshing, setAlertRefreshing] = useState(false);
   const [alertRefreshMessage, setAlertRefreshMessage] = useState<string | null>(null);
   const [newAlertIds, setNewAlertIds] = useState<Set<string>>(new Set());
   const notificationsRef = useRef<{ refresh: () => Promise<void> } | null>(null);
+  useEffect(() => {
+    setSession(readAdminSession());
+  }, []);
+
   const events = useAdminEvents((event) => {
     if (event.type === "notification" || event.type === "job_error" || event.type === "notification_update" || event.type === "review_update") {
       void notificationsRef.current?.refresh();
     }
     const keys = invalidationKeysForEvent(event.type);
     if (keys.length) invalidateAdminData(keys);
-  }, gate.status === "ready");
-  const backendReady = gate.status === "ready" && events.status === "live";
+  }, gate.status === "ready" && session.isAuthenticated);
+  const backendReady = session.isAuthenticated && gate.status === "ready" && events.status === "live";
   const notifications = useAdminData(() => adminApi.notifications(), 0, "notifications", backendReady);
   const unread = notifications.data?.unread_count || 0;
   const alerts = notifications.data?.items || [];
@@ -390,8 +493,24 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }
 
+  if (session.isLoading) {
+    return (
+      <main className="connection-gate" aria-busy="true">
+        <section className="connection-gate-card">
+          <div className="gate-orbit" aria-hidden="true"><span /><span /><span /></div>
+          <h1>Preparing Admin Login</h1>
+          <p>Checking the local dashboard login state.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!session.isAuthenticated) {
+    return <LoginScreen onLogin={setSession} />;
+  }
+
   if (!backendReady) {
-    return <ConnectionGate gate={gate} events={events} />;
+    return <ConnectionGate gate={gate} events={events} adminEmail={session.email} onLogout={() => setSession(clearAdminSession())} />;
   }
 
   return (
@@ -451,6 +570,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             ) : null}
           </div>
           <div className="topbar-actions">
+            <div className="admin-account">
+              {session.email ? <span className="admin-identity">{session.email}</span> : null}
+              <button className="button" type="button" onClick={() => setSession(clearAdminSession())}>Logout</button>
+            </div>
             <div className="alerts-menu">
               <button
                 className="icon-button alert-trigger"

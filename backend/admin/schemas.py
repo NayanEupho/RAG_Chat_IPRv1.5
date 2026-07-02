@@ -87,6 +87,11 @@ class ApiResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class AdminLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 class NormModelConfig(BaseModel):
     model_id: str
     endpoint: str
