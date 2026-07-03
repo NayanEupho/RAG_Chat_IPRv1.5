@@ -30,6 +30,8 @@ class AgentState(TypedDict):
         summary: Running conversation summary for context preservation.
         retrieval_metrics: Diagnostics for the latest retrieval pass.
         context_action: How to handle previous retrieval context.
+        last_targeted_docs: Most recent explicit document targets persisted
+            for the session, used only to resolve short follow-ups.
     """
     messages: Annotated[List[BaseMessage], add_messages]
     query: str
@@ -42,3 +44,4 @@ class AgentState(TypedDict):
     summary: Annotated[str, update_summary]
     retrieval_metrics: Dict[str, Any]
     context_action: str
+    last_targeted_docs: List[str]

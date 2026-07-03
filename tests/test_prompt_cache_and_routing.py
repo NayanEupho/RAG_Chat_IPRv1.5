@@ -7,7 +7,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from backend.graph.nodes.generate import _GENERATOR_SYSTEM_PROMPT, _build_message_list, _get_budgets, _SUMMARY_PREFIX, prepare_docs_for_generation
+from backend.graph.nodes.generate import _GENERATOR_SYSTEM_PROMPT, _build_message_list, _get_budgets, _SUMMARY_PREFIX, prepare_docs_for_generation, is_detail_request
 from backend.graph.nodes.planner import (
     _ACRONYM_CACHE,
     _contains_keyword,
@@ -82,6 +82,12 @@ def test_generator_prompt_is_concise_but_not_artificially_capped():
     assert "typically, generally, usually, likely, implies, or suggests" in _GENERATOR_SYSTEM_PROMPT
 
 
+def test_detail_request_detection_expands_only_when_explicit():
+    assert is_detail_request("Explain in detail how multi-head attention works")
+    assert is_detail_request("Give a step by step explanation")
+    assert not is_detail_request("What is this paper about?")
+
+
 def test_followup_context_action_reuses_existing_docs_for_more_detail():
     state = {
         "intent": "direct_rag",
@@ -140,6 +146,24 @@ def test_indexed_acronym_query_is_detected_from_metadata():
         assert _query_indexed_acronyms("Does EOL count for pension?") == {"eol"}
 
 
+def test_common_words_do_not_match_indexed_acronyms():
+    mock_store = MagicMock()
+    mock_store.collection.get.return_value = {
+        "metadatas": [
+            {
+                "filename": "attention_is_all_you_need.pdf",
+                "section_title": "THE model architecture",
+                "section_path": "Abstract",
+            }
+        ]
+    }
+    _ACRONYM_CACHE["terms"] = set()
+    _ACRONYM_CACHE["loaded_at"] = 0.0
+
+    with patch("backend.rag.store.get_vector_store", return_value=mock_store):
+        assert _query_indexed_acronyms("who are the authors") == set()
+
+
 def test_general_auto_queries_do_not_become_rag_followups():
     rag_state = {
         "intent": "specific_doc_rag",
@@ -188,6 +212,53 @@ def test_real_short_rag_followup_still_stays_in_rag_context():
     }
 
     assert _is_rag_followup("Tell me more about that eligibility.", rag_state)
+
+
+def test_targeted_author_followup_stays_in_previous_document_context():
+    rag_state = {
+        "intent": "specific_doc_rag",
+        "targeted_docs": ["Qlora_Paper.pdf"],
+        "documents": ["previous qlora context"],
+        "messages": [
+            HumanMessage(content="What is @Qlora_Paper.pdf paper about?"),
+            AIMessage(content="The paper introduces QLoRA."),
+            HumanMessage(content="who are the authors"),
+        ],
+    }
+
+    assert _is_rag_followup("who are the authors", rag_state)
+    assert _context_action_for_followup("who are the authors", rag_state, ["Qlora_Paper.pdf"]) == "retrieve"
+    rewritten = _contextual_followup_query("who are the authors", rag_state)
+    assert "Qlora_Paper.pdf" not in rewritten
+    assert rewritten.startswith("What is")
+
+
+def test_persisted_target_context_restores_short_author_followup():
+    rag_state = {
+        "last_targeted_docs": ["Qlora_Paper.pdf"],
+        "messages": [
+            HumanMessage(content="What is @Qlora_Paper.pdf paper about?"),
+            AIMessage(content="The paper introduces QLoRA."),
+            HumanMessage(content="who are the authors"),
+        ],
+    }
+
+    assert _is_rag_followup("who are the authors", rag_state)
+    rewritten = _contextual_followup_query("who are the authors", rag_state)
+    assert rewritten == "What is paper about who are the authors"
+
+
+def test_persisted_target_context_does_not_capture_unrelated_short_query():
+    rag_state = {
+        "last_targeted_docs": ["Qlora_Paper.pdf"],
+        "messages": [
+            HumanMessage(content="What is @Qlora_Paper.pdf paper about?"),
+            AIMessage(content="The paper introduces QLoRA."),
+            HumanMessage(content="what is mars"),
+        ],
+    }
+
+    assert not _is_rag_followup("what is mars", rag_state)
 
 
 def test_summarize_everything_stays_in_rag_context():

@@ -2,6 +2,7 @@ import sqlite3
 import json
 import logging
 import threading
+import re
 from datetime import datetime
 from functools import lru_cache
 
@@ -70,6 +71,9 @@ def init_history_db():
         if 'summary' not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT ''")
             logger.info("Migrated sessions table: added summary column")
+        if 'auto_title_eligible' not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN auto_title_eligible INTEGER DEFAULT 0")
+            logger.info("Migrated sessions table: added auto_title_eligible column")
 
         # Now safe to create indices
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
@@ -80,7 +84,7 @@ def init_history_db():
     except Exception as e:
         logger.error(f"Failed to init history DB: {e}")
 
-def create_session(session_id: str, title: str = None, user_id: str = "anonymous"):
+def create_session(session_id: str, title: str = None, user_id: str = "anonymous", auto_title_eligible: bool = False):
     init_history_db()
     conn = get_connection()
     cursor = conn.cursor()
@@ -88,19 +92,83 @@ def create_session(session_id: str, title: str = None, user_id: str = "anonymous
     if not cursor.fetchone():
         final_title = title or f"Session {session_id[:8]}"
         conn.execute(
-            "INSERT INTO sessions (session_id, title, user_id) VALUES (?, ?, ?)",
-            (session_id, final_title, user_id)
+            "INSERT INTO sessions (session_id, title, user_id, auto_title_eligible) VALUES (?, ?, ?, ?)",
+            (session_id, final_title, user_id, 1 if auto_title_eligible else 0)
         )
         conn.commit()
         return True
     return False
 
-def create_new_session(title: str = None, user_id: str = "anonymous"):
+def create_new_session(title: str = None, user_id: str = "anonymous", session_id: str = None, auto_title_eligible: bool = False):
     """Generates a new session ID and creates the session."""
     import uuid
-    session_id = f"web_{uuid.uuid4().hex[:8]}"
-    create_session(session_id, title, user_id)
+    session_id = session_id or f"web_{uuid.uuid4().hex[:8]}"
+    create_session(session_id, title, user_id, auto_title_eligible=auto_title_eligible)
     return {"session_id": session_id, "title": title or f"Session {session_id[:8]}", "user_id": user_id}
+
+def update_session_title(session_id: str, title: str, user_id: str = None):
+    """Update a session title, optionally enforcing ownership."""
+    init_history_db()
+    cleaned = re.sub(r"\s+", " ", title or "").strip()
+    if not cleaned:
+        raise ValueError("Title cannot be empty")
+    cleaned = cleaned[:80]
+    conn = get_connection()
+    if user_id:
+        cursor = conn.execute("SELECT user_id FROM sessions WHERE session_id = ?", (session_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError("Session not found")
+        if row["user_id"] != user_id:
+            raise PermissionError("Not authorized to update this session")
+    conn.execute(
+        "UPDATE sessions SET title = ?, auto_title_eligible = 0, updated_at = ? WHERE session_id = ?",
+        (cleaned, datetime.utcnow().isoformat(), session_id),
+    )
+    conn.commit()
+    return {"session_id": session_id, "title": cleaned}
+
+def get_session(session_id: str):
+    init_history_db()
+    conn = get_connection()
+    cursor = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+def is_default_session_title(title: str) -> bool:
+    if not title:
+        return True
+    cleaned = title.strip()
+    return bool(
+        re.match(r"^Session\s*-\s*\d{1,2}:\d{2}\s*(AM|PM)?$", cleaned, re.IGNORECASE)
+        or re.match(r"^Session\s+web_[a-z0-9]+$", cleaned, re.IGNORECASE)
+        or cleaned == "New Conversation"
+    )
+
+def concise_title_from_exchange(user_message: str, bot_response: str) -> str:
+    """Create a deterministic, low-latency title without an LLM call."""
+    text = f"{user_message or ''} {bot_response or ''}"
+    text = re.sub(r"@\S+", lambda m: m.group(0)[1:].rsplit(".", 1)[0], text)
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9&/-]*", text)
+    stop = {
+        "the", "and", "for", "with", "from", "what", "does", "about", "tell",
+        "more", "please", "paper", "document", "file", "this", "that", "into",
+        "are", "is", "was", "were", "who", "how", "why", "can", "you", "your",
+        "based", "provided", "retrieved", "chunk", "chunks",
+    }
+    picked = []
+    seen = set()
+    for word in words:
+        key = word.lower().strip("-_/")
+        if len(key) < 3 or key in stop or key in seen:
+            continue
+        seen.add(key)
+        picked.append(word.strip("-_/"))
+        if len(picked) == 5:
+            break
+    if not picked:
+        return "New Chat"
+    return " ".join(w[:1].upper() + w[1:] for w in picked)[:60]
 
 def add_message(session_id: str, role: str, content: str, intent: str = None, sources: list = None, metadata: dict = None, thoughts: list = None):
     # Ensure session exists (Note: this auto-creation defaults to 'anonymous' if not exists, 
@@ -180,6 +248,25 @@ def get_session_history(session_id: str):
              
         rows.append(d)
     return rows
+
+def get_recent_targeted_docs(session_id: str, limit: int = 8) -> list[str]:
+    """Return the most recent targeted document context persisted for a session."""
+    init_history_db()
+    conn = get_connection()
+    cursor = conn.execute(
+        "SELECT metadata FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    )
+    for row in cursor.fetchall():
+        raw_metadata = row["metadata"] if row["metadata"] else "{}"
+        try:
+            metadata = json.loads(raw_metadata)
+        except Exception:
+            metadata = {}
+        targeted_docs = metadata.get("targeted_docs") or []
+        if targeted_docs:
+            return [str(doc) for doc in targeted_docs if doc]
+    return []
 
 def get_session_owner(session_id: str) -> str:
     """Get the user_id that owns a session."""

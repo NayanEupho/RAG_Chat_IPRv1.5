@@ -6,6 +6,11 @@ import os
 import re
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 API_BASE = "http://localhost:8000"
 
 
@@ -67,6 +72,8 @@ def expected_source_for_query(query):
         return "Design and Development.pdf"
     if "@adg-1.pdf" in q or "three interactive design themes" in q or "single source of truth" in q:
         return "ADG-1.pdf"
+    if "@qlora_paper.pdf" in q or "qlora" in q:
+        return "Qlora_Paper.pdf"
     return None
 
 class TTFTTest:
@@ -231,6 +238,11 @@ async def run_all_tests():
     print("\n>>> WARMUP...")
     w = TTFTTest("warmup")
     await w.send_message("Hello", mode="auto")
+    qlora_warm_doc = next((d for d in docs if d.lower() == "qlora_paper.pdf"), None)
+    if qlora_warm_doc:
+        await w.send_message(f"What are the authors of @{qlora_warm_doc}?", mode="auto")
+    else:
+        await w.send_message("What is the technical report about?", mode="auto")
     print()
 
     # =========================================================
@@ -255,6 +267,24 @@ async def run_all_tests():
     await t2.send_message("Tell me more details from it", mode="auto")
     t2.print_summary("Targeted RAG")
     print()
+
+    # =========================================================
+    # TEST 2B: Targeted paper follow-up regression
+    # =========================================================
+    qlora_docs = [d for d in docs if d.lower() == "qlora_paper.pdf"]
+    t2b = TTFTTest("rag_qlora_followup")
+    if qlora_docs:
+        print(">>> TEST 2B: Targeted Paper Follow-up (@mentions)")
+        qlora_doc = qlora_docs[0]
+        first = await t2b.send_message(f"What is @{qlora_doc} paper about?", mode="auto")
+        first["expected_source"] = qlora_doc
+        second = await t2b.send_message("who are the authors", mode="auto")
+        second["expected_source"] = qlora_doc
+        t2b.print_summary("Targeted Paper Follow-up")
+        print()
+    else:
+        print(">>> TEST 2B: Targeted Paper Follow-up (@mentions) SKIPPED: Qlora_Paper.pdf not indexed")
+        print()
 
     # =========================================================
     # TEST 3: Chat mode
@@ -326,12 +356,18 @@ async def run_all_tests():
     print("=" * 70)
     print("  OVERALL RESULTS")
     print("=" * 70)
-    all_results = [t1, t2, t3, t4, t5, t6]
+    all_results = [t1, t2, t2b, t3, t4, t5, t6]
     all_ttfts = [r for tr in all_results for r in tr.results if r["ttft_ms"] > 0]
 
     ttft_values = [r["ttft_ms"] for r in all_ttfts]
     print(f"\n  Total queries: {len(all_ttfts)}")
     print(f"  TTFT: {min(ttft_values)}ms - {max(ttft_values)}ms | Avg: {sum(ttft_values)//len(ttft_values)}ms")
+    post_warm_values = ttft_values[1:]
+    if post_warm_values:
+        print(
+            f"  TTFT after first measured turn: {min(post_warm_values)}ms - {max(post_warm_values)}ms | "
+            f"Avg: {sum(post_warm_values)//len(post_warm_values)}ms"
+        )
 
     worst = sorted(all_ttfts, key=lambda x: x["ttft_ms"], reverse=True)[:5]
     print(f"\n  Worst 5 TTFTs:")
@@ -341,6 +377,7 @@ async def run_all_tests():
     # Prefix caching analysis
     print(f"\n  Prefix Caching:")
     for label, tr in [("Non-Targeted RAG", t1), ("Targeted RAG", t2),
+                       ("Targeted Paper Follow-up", t2b),
                        ("Chat", t3), ("Multi-Turn", t4), ("Follow-ups", t5),
                        ("Document Coverage", t6)]:
         ttfts = [r["ttft_ms"] for r in tr.results if r["ttft_ms"] > 0]

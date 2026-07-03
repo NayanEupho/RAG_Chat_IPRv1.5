@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List
 
 import ollama
 
-from backend.config import get_config
+from backend.config import OllamaConfig, get_config
 
 logger = logging.getLogger("rag_chat_ipr.ingestion.normalizers")
 
@@ -99,9 +99,17 @@ class LlmMarkdownNormalizer:
         )
         self.client_factory = client_factory or ollama.Client
 
-    def normalize(self, markdown: str, *, filename: str, doc_type: str, parser: str) -> NormalizationResult:
+    def normalize(
+        self,
+        markdown: str,
+        *,
+        filename: str,
+        doc_type: str,
+        parser: str,
+        model_config: Dict[str, Any] | None = None,
+    ) -> NormalizationResult:
         cfg = get_config()
-        normalization_model = cfg.normalization_model or cfg.main_model
+        normalization_model = self._resolve_model(cfg, model_config)
         if not normalization_model:
             raise ValueError("LLM normalization model is not configured; cannot run LLM normalization")
 
@@ -161,6 +169,7 @@ class LlmMarkdownNormalizer:
             "doc_type": doc_type,
             "model": normalization_model.model_name,
             "host": normalization_model.host,
+            "model_source": "batch_config" if model_config else "runtime_config",
             "raw_char_count": len(raw),
             "normalized_char_count": len(stitched),
             "raw_word_count": self._word_count(raw),
@@ -172,6 +181,15 @@ class LlmMarkdownNormalizer:
         if not accepted:
             logger.warning("[NORMALIZE] Rejected normalized output for %s: %s", filename, validation["errors"])
         return NormalizationResult(markdown=stitched if accepted else raw, accepted=accepted, manifest=manifest)
+
+    def _resolve_model(self, cfg: Any, model_config: Dict[str, Any] | None) -> OllamaConfig | None:
+        if model_config:
+            host = model_config.get("endpoint") or model_config.get("host")
+            model_name = model_config.get("model_id") or model_config.get("model_name")
+            if not host or not model_name:
+                raise ValueError("LLM normalization model config must include endpoint and model_id")
+            return OllamaConfig(host=str(host), model_name=str(model_name))
+        return cfg.normalization_model or cfg.main_model
 
     def _batch_prompt(
         self,

@@ -79,6 +79,8 @@ class IngestionWorker:
         self.processor = DocumentProcessor()
         self.vector_store = get_vector_store()
         self.running = True
+        self._active_paths: set[str] = set()
+        self._active_lock = threading.Lock()
         # Allow 4 documents to be processed in parallel
         self.semaphore = asyncio.Semaphore(4)
 
@@ -93,6 +95,13 @@ class IngestionWorker:
             try:
                 # Try to get a task without blocking the loop forever
                 file_path = await asyncio.to_thread(self.task_queue.get, timeout=1)
+                file_path = os.path.abspath(file_path)
+                with self._active_lock:
+                    if file_path in self._active_paths:
+                        logger.debug("Skipping duplicate queued ingestion event for %s", file_path)
+                        self.task_queue.task_done()
+                        continue
+                    self._active_paths.add(file_path)
                 
                 # Start processing as a nested task (not blocking other files)
                 asyncio.create_task(self.guarded_process_file(file_path))
@@ -125,6 +134,8 @@ class IngestionWorker:
             except Exception as e:
                 logger.error(f"Failed to process {file_path}: {e}")
             finally:
+                with self._active_lock:
+                    self._active_paths.discard(os.path.abspath(file_path))
                 self.task_queue.task_done()
 
     async def async_process_new_file(self, file_path: str):
@@ -183,8 +194,13 @@ class IngestionWorker:
         
         if len(all_embeddings) != len(texts):
             logger.error(f"Mismatch in embedding count: expected {len(texts)}, got {len(all_embeddings)}")
-            return
+            raise RuntimeError(f"Mismatch in embedding count: expected {len(texts)}, got {len(all_embeddings)}")
 
+        first_metadata = metadatas[0] if metadatas else {}
+        source = first_metadata.get("source")
+        filename = first_metadata.get("filename")
+        if hasattr(self.vector_store, "delete_legacy_document") and (source or filename):
+            self.vector_store.delete_legacy_document(filename=filename or os.path.basename(str(source)), source=source)
         self.vector_store.add_documents(texts, metadatas, ids, all_embeddings)
 
 

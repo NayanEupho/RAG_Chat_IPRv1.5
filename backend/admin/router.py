@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import queue
@@ -67,6 +68,13 @@ def _model_health_ttl_seconds() -> float:
         return 45.0
 
 
+def _model_health_timeout_seconds() -> float:
+    try:
+        return max(0.2, float(os.getenv("ADMIN_MODEL_HEALTH_TIMEOUT_SECONDS", "0.75")))
+    except ValueError:
+        return 0.75
+
+
 @router.post("/auth/login")
 def admin_login(payload: AdminLoginRequest):
     user = authenticate_admin(payload.email, payload.password)
@@ -85,7 +93,7 @@ def _model_health_cache_key(model, engine: str) -> tuple[str, str]:
 def _probe_ollama_tags(model) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        response = httpx.get(f"{str(model.host).rstrip('/')}/api/tags", timeout=1.5)
+        response = httpx.get(f"{str(model.host).rstrip('/')}/api/tags", timeout=_model_health_timeout_seconds())
         response.raise_for_status()
         payload = response.json()
         names = {item.get("name") for item in payload.get("models", []) if isinstance(item, dict)}
@@ -156,6 +164,65 @@ def _coerce_bool(value, default: bool) -> bool:
     if lowered in {"false", "0", "no", "off"}:
         return False
     return default
+
+
+def _normalization_models_from_config(
+    *,
+    model_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    display_name: Optional[str] = None,
+) -> list[dict[str, str]]:
+    if model_id and endpoint:
+        return [
+            {
+                "model_id": model_id,
+                "endpoint": endpoint,
+                "display_name": display_name or model_id,
+            }
+        ]
+
+    from backend.config import get_config
+
+    cfg = get_config()
+    model = cfg.normalization_model or cfg.main_model
+    if not model:
+        return []
+    return [
+        {
+            "model_id": model.model_name,
+            "endpoint": model.host,
+            "display_name": model.model_name,
+        }
+    ]
+
+
+def _complete_normalization_config(config: dict[str, Any]) -> dict[str, Any]:
+    completed = {**config}
+    default_models = completed.get("default_normalization_models") or []
+    if completed.get("default_normalization_enabled"):
+        default_models = default_models or _normalization_models_from_config()
+        if not default_models:
+            raise ValueError("LLM normalization requires a configured normalization model endpoint")
+        completed["default_normalization_models"] = default_models
+    else:
+        completed["default_normalization_models"] = []
+
+    overrides = dict(completed.get("per_document_overrides") or {})
+    for document_id, override in list(overrides.items()):
+        if not isinstance(override, dict):
+            continue
+        doc_config = {**override}
+        doc_normalization = _coerce_bool(doc_config.get("normalization_enabled"), bool(completed.get("default_normalization_enabled")))
+        if doc_normalization:
+            doc_models = doc_config.get("normalization_models") or default_models or _normalization_models_from_config()
+            if not doc_models:
+                raise ValueError("LLM normalization requires a configured normalization model endpoint")
+            doc_config["normalization_models"] = doc_models
+        else:
+            doc_config["normalization_models"] = []
+        overrides[document_id] = doc_config
+    completed["per_document_overrides"] = overrides
+    return completed
 
 
 @router.get("/stats")
@@ -257,6 +324,15 @@ def runtime_config():
             "available": bool(cfg.vlm_model and str(cfg.vlm_model).lower() != "false"),
         },
     ]
+    model_specs = [
+        ("Main model (retriever)", cfg.main_model, cfg.main_engine, None),
+        ("Embedding model (vectorizer)", cfg.embedding_model, cfg.embedding_engine, None),
+        ("VLM model (vision/OCR)", vlm_model, cfg.vlm_engine, bool(vlm_model)),
+        ("LLM normalization model", normalization_model, cfg.normalization_engine, None),
+    ]
+    with ThreadPoolExecutor(max_workers=len(model_specs)) as executor:
+        models = list(executor.map(lambda item: model_row(*item), model_specs))
+
     return ok(
         {
             "normalization": {
@@ -274,12 +350,7 @@ def runtime_config():
                 "engine": cfg.embedding_engine,
                 "configured": bool(cfg.embedding_model),
             },
-            "models": [
-                model_row("Main model (retriever)", cfg.main_model, cfg.main_engine),
-                model_row("Embedding model (vectorizer)", cfg.embedding_model, cfg.embedding_engine),
-                model_row("VLM model (vision/OCR)", vlm_model, cfg.vlm_engine, configured=bool(vlm_model)),
-                model_row("LLM normalization model", normalization_model, cfg.normalization_engine),
-            ],
+            "models": models,
             "parsing_mode": cfg.parsing_mode,
             "parser_options": parser_options,
             "vision": {
@@ -318,22 +389,18 @@ async def create_batch(
         cfg = get_config()
         if not cfg.vlm_model or str(cfg.vlm_model).lower() == "false":
             raise HTTPException(status_code=400, detail="VLM parser requires RAG_VLM_MODEL to be configured")
-    normalization_models = []
-    if normalization_model_id and normalization_endpoint:
-        normalization_models.append(
-            {
-                "model_id": normalization_model_id,
-                "endpoint": normalization_endpoint,
-                "display_name": normalization_display_name or normalization_model_id,
-            }
-        )
+    normalization_models = _normalization_models_from_config(
+        model_id=normalization_model_id,
+        endpoint=normalization_endpoint,
+        display_name=normalization_display_name,
+    )
     if normalization_enabled and not normalization_models:
         raise HTTPException(status_code=400, detail="LLM normalization requires a configured normalization model endpoint")
     config = model_dict(
         BatchConfig(
             default_parsers=[ParserType(parser)],
             default_normalization_enabled=normalization_enabled,
-            default_normalization_models=normalization_models,
+            default_normalization_models=normalization_models if normalization_enabled else [],
             default_ingestion_type=IngestionType(default_ingestion_type),
             review_required=review_required,
         )
@@ -423,7 +490,7 @@ def get_batch(batch_id: str):
 @router.patch("/batches/{batch_id}/config")
 def update_batch_config(batch_id: str, payload: BatchConfigPatch):
     try:
-        return ok(repo.update_batch_config(batch_id, model_dict(payload)))
+        return ok(repo.update_batch_config(batch_id, _complete_normalization_config(model_dict(payload))))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
@@ -554,7 +621,10 @@ def download_document_file(document_id: str, file_type: str, download: bool = Fa
 
 @router.delete("/documents/{document_id}")
 def delete_indexed_document(document_id: str):
-    document = repo.get_document(document_id)
+    try:
+        document = repo.get_document(document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     if document["status"] != DocumentStatus.INDEXED.value:
         raise HTTPException(status_code=400, detail="Only indexed documents can be deleted")
     try:
@@ -606,16 +676,27 @@ def download_legacy_document_file(legacy_id: str, file_type: str, download: bool
 def bulk_delete_documents(payload: BulkDeleteRequest):
     deleted = []
     errors = []
+    deleted_legacy = False
+    deleted_admin = False
     for item in payload.items:
         origin = item.get("origin")
         identifier = item.get("id") or item.get("document_id")
         try:
             if origin == "legacy":
-                deleted.append(warehouse.delete_legacy_document(str(identifier)))
+                result = warehouse.delete_legacy_document(str(identifier))
+                deleted.append(result)
+                deleted_legacy = True
+                repo.log(stage="CLEANUP", level="INFO", message=f"Legacy document deleted: {result['document']['filename']}", detail=result["document"].get("source_path"))
             else:
                 deleted.append(delete_indexed_document(str(identifier))["data"])
+                deleted_admin = True
         except Exception as exc:
             errors.append({"id": identifier, "origin": origin, "error": str(exc)})
+    if deleted_legacy:
+        event_hub.publish({"type": "warehouse_update", "action": "bulk_delete", "origin": "legacy"})
+        event_hub.publish({"type": "stats_update", "action": "bulk_delete"})
+    elif deleted_admin:
+        event_hub.publish({"type": "stats_update", "action": "bulk_delete"})
     return ok({"deleted": deleted, "errors": errors})
 
 

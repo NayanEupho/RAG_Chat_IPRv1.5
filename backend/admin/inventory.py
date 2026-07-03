@@ -140,14 +140,41 @@ def iter_generated_chunks(limit: int = 500) -> list[dict[str, Any]]:
 
 
 def inventory_summary() -> dict[str, Any]:
-    source_files = list_source_files(limit=10000)
-    generated_files = list_generated_files(limit=10000)
-    runs = list_artifact_runs(limit=10000)
+    source_count = 0
+    pdf_count = 0
+    if SOURCE_ROOT.exists():
+        allowed_sources = {".pdf", ".docx", ".md", ".markdown", ".txt"}
+        for path in SOURCE_ROOT.rglob("*"):
+            if not path.is_file() or path.name == ".gitkeep" or path.suffix.lower() not in allowed_sources:
+                continue
+            source_count += 1
+            if path.suffix.lower() == ".pdf":
+                pdf_count += 1
+
+    generated_count = 0
+    markdown_count = 0
+    chunk_file_count = 0
+    artifact_run_count = 0
+    if GENERATED_ROOT.exists():
+        allowed_generated = {".md", ".json", ".jsonl"}
+        for path in GENERATED_ROOT.rglob("*"):
+            if not path.is_file() or path.name == ".gitkeep":
+                continue
+            if path.name == "manifest.json":
+                artifact_run_count += 1
+            if path.suffix.lower() not in allowed_generated:
+                continue
+            generated_count += 1
+            if path.suffix.lower() in {".md", ".markdown"}:
+                markdown_count += 1
+            if path.name == "chunks.jsonl":
+                chunk_file_count += 1
+
     return {
-        "source_files": len(source_files),
-        "generated_files": len(generated_files),
-        "artifact_runs": len(runs),
-        "pdf_files": sum(1 for item in source_files if item["extension"] == "pdf"),
-        "markdown_files": sum(1 for item in generated_files if item["extension"] in {"md", "markdown"}),
-        "chunk_files": sum(1 for item in generated_files if item["filename"] == "chunks.jsonl"),
+        "source_files": source_count,
+        "generated_files": generated_count,
+        "artifact_runs": artifact_run_count,
+        "pdf_files": pdf_count,
+        "markdown_files": markdown_count,
+        "chunk_files": chunk_file_count,
     }

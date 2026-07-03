@@ -298,6 +298,8 @@ def _query_variants(query: str, semantic_maps: list[dict], targeted_docs: list[s
     lower = base.lower()
     if any(t in lower for t in ["summary", "summarize", "overview", "about"]):
         variants.append(f"{keyword or base} purpose scope overview conclusion")
+    elif any(t in lower for t in ["author", "authors", "affiliation", "affiliations", "title", "abstract"]):
+        variants.append(f"{keyword or base} authors affiliations title abstract paper")
     elif any(t in lower for t in ["technology", "technologies", "stack", "component", "framework", "tool"]):
         variants.append(f"{keyword or base} technology stack component breakdown tools frameworks runtime language")
     elif any(t in lower for t in ["eligibility", "eligible", "criteria", "who can"]):
@@ -537,12 +539,14 @@ async def retrieve_documents(state: AgentState):
         "adjacent_context_count": 0,
         "reason": None,
     }
+    embedding_durations = []
+    vector_durations = []
 
     per_query = min(12 if has_targets else 18, max(top_k * (2 if has_targets else 3), top_k + 4))
     pool_limit = min(36 if has_targets else 56, per_query * max(1, len(query_plan)))
 
     async def fetch_intro(doc_name: str):
-        if not any(term in query.lower() for term in ["about", "overview", "purpose", "scope", "summarize", "summary"]):
+        if not any(term in query.lower() for term in ["about", "overview", "purpose", "scope", "summarize", "summary", "author", "authors", "affiliation", "title", "abstract"]):
             return []
         try:
             intro_where = {"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 2}}]}
@@ -591,13 +595,13 @@ async def retrieve_documents(state: AgentState):
         if not q_embed:
             emb_start = time.monotonic()
             q_embed = await get_cached_embedding(q, model)
-            metrics["embedding_ms"] += int((time.monotonic() - emb_start) * 1000)
+            embedding_durations.append(int((time.monotonic() - emb_start) * 1000))
         if not q_embed:
             return []
         filters = {"filename": target_file} if target_file else None
         vec_start = time.monotonic()
         res = store.query(query_embeddings=q_embed, n_results=per_query, where=filters)
-        metrics["vector_ms"] += int((time.monotonic() - vec_start) * 1000)
+        vector_durations.append(int((time.monotonic() - vec_start) * 1000))
         docs = []
         for doc_list, metas, distances in zip(
             res.get('documents') or [],
@@ -676,6 +680,10 @@ async def retrieve_documents(state: AgentState):
         tasks.extend(fetch_intro(doc) for doc in targeted_docs)
 
     batches = await asyncio.gather(*tasks)
+    metrics["embedding_ms"] = max(embedding_durations) if embedding_durations else 0
+    metrics["embedding_total_ms"] = sum(embedding_durations)
+    metrics["vector_ms"] = max(vector_durations) if vector_durations else 0
+    metrics["vector_total_ms"] = sum(vector_durations)
     candidates = _dedupe_docs([doc for batch in batches for doc in batch])
     for doc in candidates:
         doc["_score"] = _hybrid_score(query, doc)

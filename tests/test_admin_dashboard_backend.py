@@ -57,7 +57,7 @@ def test_model_health_reuses_cached_probe_within_ttl(monkeypatch):
     assert second["cached"] is True
     assert third["status"] == "online"
     assert third["cached"] is True
-    assert calls == [("http://127.0.0.1:11434/api/tags", 1.5)]
+    assert calls == [("http://127.0.0.1:11434/api/tags", 0.75)]
 
 
 def test_admin_health_endpoint_is_lightweight_and_reports_ready_database(isolated_admin):
@@ -408,6 +408,52 @@ def test_worker_does_not_rerun_stale_chunk_job_for_already_indexed_document(isol
     assert result["skipped"][0]["reason"] == "stage_already_advanced"
     assert repo.get_job(job["job_id"])["status"] == JobStatus.COMPLETE.value
     assert repo.get_document(document["document_id"])["status"] == DocumentStatus.INDEXED.value
+
+
+def test_worker_fails_chunk_job_when_no_chunks_are_produced(isolated_admin, monkeypatch):
+    from backend.admin.worker import AdminWorker
+    from backend.ingestion.processor import DocumentProcessor
+    from backend.rag import store as store_module
+
+    class FakeStore:
+        def delete_document(self, document_id):
+            return None
+
+    document = _create_document(isolated_admin, batch_id="batch_zero_chunks", document_id="doc_zero_chunks")
+    repo.submit_batch(document["batch_id"])
+    variant = repo.create_parse_variant(document_id=document["document_id"], parser_type="docling")
+    parsed_path = isolated_admin / "generated_doc_md" / "parsed.md"
+    approved_path = isolated_admin / "generated_doc_md" / "approved.md"
+    parsed_path.parent.mkdir(parents=True, exist_ok=True)
+    parsed_path.write_text("# Parsed", encoding="utf-8")
+    approved_path.write_text("", encoding="utf-8")
+    repo.update_parse_variant(variant["variant_id"], status=VariantStatus.COMPLETE.value, parsed_md_path=str(parsed_path), raw_md_path=str(parsed_path))
+    repo.create_or_update_review(
+        document_id=document["document_id"],
+        selected_parse_variant_id=variant["variant_id"],
+        selected_norm_variant_id=None,
+        base_md_path=str(parsed_path),
+        status="APPROVED",
+    )
+    repo.update_review(document["document_id"], review_approved_md_path=str(approved_path))
+    repo.set_document_status(document["document_id"], DocumentStatus.CHUNK_PENDING.value)
+    job = repo.create_job(
+        job_type="chunk",
+        stage=PipelineStage.CHUNK.value,
+        batch_id=document["batch_id"],
+        document_id=document["document_id"],
+        payload={"document_id": document["document_id"]},
+    )
+    monkeypatch.setattr(store_module, "get_vector_store", lambda: FakeStore())
+    monkeypatch.setattr(DocumentProcessor, "process_file", lambda self, *args, **kwargs: [])
+
+    with pytest.raises(ValueError, match="zero chunks"):
+        AdminWorker()._chunk(job["job_id"], job)
+
+    failed = repo.get_document(document["document_id"])
+    assert failed["status"] == DocumentStatus.CHUNK_FAILED.value
+    assert "zero chunks" in failed["error_summary"]
+    assert repo.list_chunks(document_id=document["document_id"])["total"] == 0
 
 
 def test_vector_stats_detail_reports_mirror_and_chroma_counts(monkeypatch):
@@ -899,6 +945,23 @@ def test_runtime_config_exposes_separate_normalization_model(isolated_admin, mon
     assert rows["LLM normalization model"]["model_id"] == "norm-model"
 
 
+def test_runtime_config_refreshes_normalization_model_from_env(isolated_admin, monkeypatch):
+    from backend import config as config_module
+    from backend.config import get_config
+
+    config_module._runtime_config.normalization_model = None
+    monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-a:11434")
+    monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-a")
+    assert get_config().normalization_model.model_name == "norm-a"
+
+    monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-b:11434")
+    monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-b")
+    cfg = get_config()
+
+    assert cfg.normalization_model.host == "http://norm-b:11434"
+    assert cfg.normalization_model.model_name == "norm-b"
+
+
 def test_create_batch_rejects_unsupported_parser(isolated_admin):
     from backend.admin.router import router
 
@@ -932,8 +995,16 @@ def test_create_batch_rejects_unconfigured_vlm_parser(isolated_admin, monkeypatc
     assert "RAG_VLM_MODEL" in response.json()["detail"]
 
 
-def test_create_batch_rejects_normalization_without_model(isolated_admin):
+def test_create_batch_rejects_normalization_without_model(isolated_admin, monkeypatch):
     from backend.admin.router import router
+    from backend import config as config_module
+
+    config_module._runtime_config.main_model = None
+    config_module._runtime_config.normalization_model = None
+    monkeypatch.setenv("RAG_MAIN_HOST", "")
+    monkeypatch.setenv("RAG_MAIN_MODEL", "")
+    monkeypatch.setenv("RAG_NORMALIZATION_HOST", "")
+    monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "")
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -945,6 +1016,35 @@ def test_create_batch_rejects_normalization_without_model(isolated_admin):
 
     assert response.status_code == 400
     assert "normalization model" in response.json()["detail"].lower()
+
+
+def test_create_batch_uses_env_normalization_model_when_form_model_omitted(isolated_admin, monkeypatch):
+    from backend.admin.router import router
+    from backend import config as config_module
+
+    config_module._runtime_config.main_model = None
+    config_module._runtime_config.embedding_model = None
+    config_module._runtime_config.normalization_model = None
+    monkeypatch.setenv("RAG_MAIN_HOST", "http://main-host:11434")
+    monkeypatch.setenv("RAG_MAIN_MODEL", "main-model")
+    monkeypatch.setenv("RAG_EMBED_HOST", "http://embed-host:11434")
+    monkeypatch.setenv("RAG_EMBED_MODEL", "embed-model")
+    monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-host:11434")
+    monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-model")
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    response = TestClient(app).post(
+        "/api/v1/batches",
+        data={"batch_name": "Needs model", "parser": "docling", "normalization_enabled": "true"},
+        files=[("files", ("sample.pdf", b"%PDF-1.4\n", "application/pdf"))],
+    )
+
+    assert response.status_code == 200
+    batch = response.json()["data"]
+    models = batch["config"]["default_normalization_models"]
+    assert models == [{"model_id": "norm-model", "endpoint": "http://norm-host:11434", "display_name": "norm-model"}]
+    assert batch["documents"][0]["effective_config"]["normalization_models"][0]["model_id"] == "norm-model"
 
 
 def test_create_batch_accepts_mixed_document_ingestion_types(isolated_admin):
@@ -1090,6 +1190,51 @@ def test_update_draft_batch_config_edits_per_document_settings_and_moves_source_
     assert "QnA" in updated_doc["source_file_path"]
     assert Path(updated_doc["source_file_path"]).exists()
     assert not Path(document["source_file_path"]).exists()
+
+
+def test_update_batch_config_fills_env_normalization_model(isolated_admin, monkeypatch):
+    from backend.admin.router import router
+    from backend import config as config_module
+
+    config_module._runtime_config.main_model = None
+    config_module._runtime_config.embedding_model = None
+    config_module._runtime_config.normalization_model = None
+    monkeypatch.setenv("RAG_MAIN_HOST", "http://main-host:11434")
+    monkeypatch.setenv("RAG_MAIN_MODEL", "main-model")
+    monkeypatch.setenv("RAG_EMBED_HOST", "http://embed-host:11434")
+    monkeypatch.setenv("RAG_EMBED_MODEL", "embed-model")
+    monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-host:11434")
+    monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-model")
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/batches",
+        data={"batch_name": "Editable normalization draft", "parser": "docling", "normalization_enabled": "false"},
+        files=[("files", ("policy.pdf", b"%PDF-1.4\n", "application/pdf"))],
+    )
+    assert created.status_code == 200
+    batch = created.json()["data"]
+
+    updated = client.patch(
+        f"/api/v1/batches/{batch['batch_id']}/config",
+        json={
+            "default_parsers": ["docling"],
+            "default_normalization_enabled": True,
+            "default_normalization_models": [],
+            "default_ingestion_type": "general",
+            "review_required": True,
+            "per_document_overrides": {},
+        },
+    )
+
+    assert updated.status_code == 200
+    config = updated.json()["data"]["config"]
+    assert config["default_normalization_models"] == [
+        {"model_id": "norm-model", "endpoint": "http://norm-host:11434", "display_name": "norm-model"}
+    ]
+    assert updated.json()["data"]["documents"][0]["effective_config"]["normalization_models"][0]["model_id"] == "norm-model"
 
 
 def test_update_batch_config_rejects_non_draft_batches(isolated_admin):
@@ -1286,6 +1431,48 @@ def test_delete_legacy_document_removes_source_and_generated_artifact_run(isolat
     assert not source.exists()
     assert not run_dir.exists()
     assert not (isolated_admin / "generated_doc_md" / "legacy").exists()
+
+
+def test_bulk_delete_legacy_document_publishes_inventory_events(isolated_admin, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.admin import router as admin_router
+    from backend.admin import warehouse
+    from backend.rag import store as store_module
+
+    published = []
+    source = isolated_admin / "upload_docs" / "General" / "legacy.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"%PDF-1.4\n")
+
+    class FakeStore:
+        def delete_legacy_document(self, *, filename, source):
+            return None
+
+    monkeypatch.setattr(store_module, "get_vector_store", lambda: FakeStore())
+    monkeypatch.setattr(admin_router.event_hub, "publish", lambda event: published.append(event))
+    monkeypatch.setattr(warehouse, "SOURCE_ROOT", isolated_admin / "upload_docs")
+    monkeypatch.setattr(warehouse, "GENERATED_ROOT", isolated_admin / "generated_doc_md")
+    monkeypatch.setattr(
+        warehouse,
+        "_fetch_chroma_metadatas",
+        lambda: [{"filename": "legacy.pdf", "source": str(source), "parser": "docling"}],
+    )
+    monkeypatch.setattr(warehouse, "list_artifact_runs", lambda limit=10000: [])
+    warehouse._legacy_cache["expires_at"] = 0.0
+    legacy_id = warehouse.legacy_indexed_documents(force_refresh=True)[0]["id"]
+
+    app = FastAPI()
+    app.include_router(admin_router.router, prefix="/api/v1")
+    response = TestClient(app).post(
+        "/api/v1/documents/bulk-delete",
+        json={"items": [{"id": legacy_id, "origin": "legacy"}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["errors"] == []
+    assert any(event["type"] == "warehouse_update" and event["action"] == "bulk_delete" for event in published)
+    assert any(event["type"] == "stats_update" and event["action"] == "bulk_delete" for event in published)
 
 
 def test_legacy_warehouse_merges_relative_and_absolute_source_duplicates(isolated_admin, monkeypatch):

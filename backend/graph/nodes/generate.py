@@ -86,6 +86,14 @@ def _is_table_source(doc: str) -> bool:
     return "Table Row:" in doc or "chunk_kind: table_row" in doc or "[ChunkKind: table_row]" in doc
 
 
+def is_detail_request(query: str) -> bool:
+    lower = (query or "").lower()
+    return bool(re.search(
+        r"\b(explain in detail|full details|in depth|deep dive|step by step|elaborate|comprehensive|everything|all details)\b",
+        lower,
+    ))
+
+
 def _compact_table_doc(doc: str, max_chars: int = 1400) -> str:
     """
     Keep table-row evidence compact for low TTFT.
@@ -198,6 +206,8 @@ async def generate_answer(state: AgentState):
     intent = state['intent']
     mode = state.get('mode', 'auto')
     prev_summary = state.get('summary', '')
+    latest_query = state.get('query', messages[-1].content)
+    wants_detail = is_detail_request(latest_query)
 
     logger.info(f"[GENERATE] Intent: {intent}, Mode: {mode}, Docs count: {len(docs)}")
 
@@ -256,11 +266,19 @@ async def generate_answer(state: AgentState):
                 "and ask the user to upload or target the relevant document."
             )
 
-        rag_prompt = f"""{targeting_context}
+        detail_instruction = ""
+        if wants_detail:
+            detail_instruction = (
+                "\n[ANSWER DEPTH]\n"
+                "The user explicitly asked for detail. Provide a complete structured answer with the relevant facts, "
+                "steps, exceptions, and citations from the retrieved evidence. Do not stay artificially brief.\n"
+            )
+
+        rag_prompt = f"""{targeting_context}{detail_instruction}
 <docs>
 {context_block}
 </docs>
-Q: {state.get('query', messages[-1].content)}
+Q: {latest_query}
 """
         final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
         final_messages.append({"role": "user", "content": rag_prompt})

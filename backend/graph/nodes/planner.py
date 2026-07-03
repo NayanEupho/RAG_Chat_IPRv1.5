@@ -12,7 +12,12 @@ import time
 logger = logging.getLogger(__name__)
 
 _ACRONYM_CACHE = {"loaded_at": 0.0, "terms": set()}
-_ACRONYM_STOPWORDS = {"A", "AN", "AS", "AT", "BY", "DO", "GO", "IF", "IN", "IS", "IT", "NO", "OF", "ON", "OR", "TO", "UP", "US"}
+_ACRONYM_STOPWORDS = {
+    "A", "AN", "AND", "ARE", "AS", "AT", "BY", "DO", "DID", "DOES", "FOR",
+    "FROM", "GO", "HAS", "HAVE", "IF", "IN", "IS", "IT", "NO", "OF", "ON",
+    "OR", "THE", "THIS", "THAT", "TO", "UP", "US", "WAS", "WERE", "WHAT",
+    "WHO", "WITH",
+}
 
 _QUERY_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "based", "be", "by", "can", "could",
@@ -250,32 +255,44 @@ def _is_general_chat_query(query: str) -> bool:
     ])
 
 
+def _recent_target_context(state: AgentState) -> list[str]:
+    return state.get("targeted_docs") or state.get("last_targeted_docs") or []
+
+
+def _has_followup_signal(lower: str) -> bool:
+    followup_terms = [
+        "more", "details", "eligibility", "criteria", "benefit", "benefits",
+        "limitations", "conclusions", "methodology", "future work", "compare",
+        "summarize", "summarise", "summary", "everything", "author", "authors",
+        "affiliation", "affiliations", "title", "abstract", "dataset", "results",
+    ]
+    return _has_reference_pronoun(lower) or any(term in lower for term in followup_terms)
+
+
 def _is_rag_followup(query: str, state: AgentState) -> bool:
     lower = query.lower().strip()
     if _is_explicit_chat_shift(lower) or _is_general_chat_query(lower):
         return False
-    if state.get("intent") not in ["direct_rag", "specific_doc_rag"] and not state.get("documents"):
+    recent_targets = _recent_target_context(state)
+    if state.get("intent") not in ["direct_rag", "specific_doc_rag"] and not state.get("documents") and not recent_targets:
         return False
-    followup_terms = [
-        "more", "details", "eligibility", "criteria", "benefit", "benefits",
-        "limitations", "conclusions", "methodology", "future work", "compare",
-        "summarize", "summarise", "summary", "everything",
-    ]
     if len(lower) <= 80:
-        return _has_reference_pronoun(lower) or any(term in lower for term in followup_terms)
+        return _has_followup_signal(lower)
     return _has_reference_pronoun(lower) or any(term in lower for term in [
-        "more", "details",
-        "eligibility", "criteria", "benefit", "limitations", "conclusions",
-        "methodology", "future work", "compare"
+        "more", "details", "eligibility", "criteria", "benefit", "limitations",
+        "conclusions", "methodology", "future work", "compare", "author",
+        "authors", "affiliation", "title", "abstract",
     ])
 
 
 def _contextual_followup_query(query: str, state: AgentState) -> str:
     lower = query.lower()
     previous = _previous_substantive_user_query(state) or _previous_user_query(state)
+    recent_targets = _recent_target_context(state)
     if previous and (
         _has_reference_pronoun(lower)
         or re.search(r"\b(tell me more|more details|summari[sz]e everything|summary|what about)\b", lower)
+        or (recent_targets and len(lower) <= 120 and _has_followup_signal(lower))
     ):
         previous_mentions = _extract_mentions(previous)
         previous = _clean_query_text(previous, previous_mentions) or previous
@@ -298,11 +315,15 @@ def _context_action_for_followup(query: str, state: AgentState, mentions: list[s
     lower = query.lower().strip()
     if not state.get("documents"):
         return "retrieve"
-    if mentions:
-        return "hybrid"
     if re.search(r"\b(compare|versus|vs\.?|including|exceptions|edge cases|full details|everything)\b", lower):
         return "hybrid"
-    if re.search(r"\b(exact|rule|faq|eligibility|eligible|criteria|what about|which|where|when|how many)\b", lower):
+    if re.search(r"\b(exact|rule|faq|eligibility|eligible|criteria|what about|which|where|when|how many|author|authors|affiliation|title|abstract)\b", lower):
+        return "retrieve"
+    if mentions:
+        if re.search(r"\b(technolog(?:y|ies)|methodology|conclusions?|limitations?|future work|benefits?|summary|summari[sz]e)\b", lower):
+            return "retrieve"
+        if re.search(r"\b(tell me more|more details|explain more|elaborate|expand)\b", lower):
+            return "answer_from_existing"
         return "retrieve"
     if re.search(r"\b(tell me more|more details|explain more|elaborate|what does that mean|explain this|expand)\b", lower):
         return "answer_from_existing"
@@ -363,7 +384,7 @@ async def planner_node(state: AgentState):
                 return _chat_result(original_query)
 
     cleaned_query = _clean_query_text(original_query, mentions)
-    previous_targets = state.get("targeted_docs", []) or []
+    previous_targets = _recent_target_context(state)
 
     forced_intent = None
     if mode == 'rag' or mentions:
@@ -386,20 +407,6 @@ async def planner_node(state: AgentState):
         if _is_explicit_chat_shift(original_query) or _is_general_chat_query(original_query):
             logger.info("[PLANNER] Fast-Path: Chat (general/chat-shift query)")
             return _chat_result(original_query)
-
-        indexed_acronyms = _query_indexed_acronyms(original_query)
-        if indexed_acronyms:
-            logger.info(f"[PLANNER] Fast-Path: Direct RAG (indexed acronym: {sorted(indexed_acronyms)})")
-            semantic_queries = _build_semantic_queries(cleaned_query or original_query, max_variants=2)
-            return {
-                "intent": "direct_rag",
-                "query": cleaned_query or original_query,
-                "targeted_docs": [],
-                "semantic_queries": semantic_queries,
-                "documents": [],
-                "query_embedding": None,
-                "context_action": "retrieve",
-            }
 
         for k in CHAT_KEYWORDS:
             if not mentions and _contains_keyword(query_lower, k):
@@ -432,6 +439,20 @@ async def planner_node(state: AgentState):
                 "documents": state.get("documents", []) if context_action in {"answer_from_existing", "hybrid"} else [],
                 "query_embedding": None,
                 "context_action": context_action,
+            }
+
+        indexed_acronyms = _query_indexed_acronyms(original_query)
+        if indexed_acronyms:
+            logger.info(f"[PLANNER] Fast-Path: Direct RAG (indexed acronym: {sorted(indexed_acronyms)})")
+            semantic_queries = _build_semantic_queries(cleaned_query or original_query, max_variants=2)
+            return {
+                "intent": "direct_rag",
+                "query": cleaned_query or original_query,
+                "targeted_docs": [],
+                "semantic_queries": semantic_queries,
+                "documents": [],
+                "query_embedding": None,
+                "context_action": "retrieve",
             }
 
         if not mentions and _is_contextual_summary_request(original_query, state):

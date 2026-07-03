@@ -414,7 +414,13 @@ class AdminWorker:
         try:
             source = files.read_text(variant["parsed_md_path"])
             normalizer = LlmMarkdownNormalizer()
-            result = normalizer.normalize(source, filename=document["original_filename"], doc_type=doc_type, parser=variant["parser_type"])
+            result = normalizer.normalize(
+                source,
+                filename=document["original_filename"],
+                doc_type=doc_type,
+                parser=variant["parser_type"],
+                model_config=norm["model_config"],
+            )
             target_dir = files.normalization_dir(document["batch_id"], document["document_id"], norm["norm_variant_id"])
             normalized_path = files.write_text(target_dir / "normalized.md", result.markdown)
             completed_at = now_iso()
@@ -485,6 +491,8 @@ class AdminWorker:
             processor = DocumentProcessor()
             doc_type = document["effective_config"].get("ingestion_type", "general")
             chunks = processor.process_file(review["review_approved_md_path"], mode="markdown", llm_normalize=False, doc_type=doc_type)
+            if not chunks:
+                raise ValueError("Chunking produced zero chunks; document was not indexed")
             reviewed_md_name = Path(review["review_approved_md_path"]).name
             for chunk in chunks:
                 chunk["text"] = rewrite_chunk_doc_label(

@@ -81,7 +81,7 @@ class AppConfig(BaseModel):
     # Force-disable reasoning for all models (env RAG_NO_THINKING).
     # When True, ChatOllama is created with reasoning=False regardless of auto-detect.
     no_thinking: bool = False
-    num_predict: int = 512
+    num_predict: int = 1024
     temperature: float = 0.2
 
     @field_validator("rag_workflow")
@@ -121,7 +121,7 @@ def get_config() -> AppConfig:
 
     normalize_host = os.getenv("RAG_NORMALIZATION_HOST")
     normalize_model = os.getenv("RAG_NORMALIZATION_MODEL")
-    if not _runtime_config.normalization_model and normalize_host and normalize_model:
+    if normalize_host and normalize_model:
         _runtime_config.normalization_model = OllamaConfig(host=normalize_host, model_name=normalize_model)
     elif not _runtime_config.normalization_model and _runtime_config.main_model:
         _runtime_config.normalization_model = _runtime_config.main_model

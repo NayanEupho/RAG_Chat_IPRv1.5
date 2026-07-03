@@ -4,19 +4,28 @@ import { useState, useEffect } from "react";
 import styles from "./NewChatModal.module.css";
 import { MessageSquarePlus } from "lucide-react";
 
-export default function NewChatModal({ isOpen, onClose, onCreate }: { isOpen: boolean; onClose: () => void; onCreate: (title: string) => void }) {
+export default function NewChatModal({ isOpen, onClose, onCreate }: { isOpen: boolean; onClose: () => void; onCreate: (title: string, autoTitleEligible: boolean) => void }) {
     const [title, setTitle] = useState("");
+    const [defaultTitle, setDefaultTitle] = useState("");
+    const [titleEdited, setTitleEdited] = useState(false);
 
     useEffect(() => {
         if (isOpen) {
             const date = new Date();
-            setTitle(`Session - ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+            const nextTitle = `Session - ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+            setTitle(nextTitle);
+            setDefaultTitle(nextTitle);
+            setTitleEdited(false);
         }
     }, [isOpen]);
 
+    const createSession = () => {
+        onCreate(title, !titleEdited && title === defaultTitle);
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter") {
-            onCreate(title);
+            createSession();
         } else if (e.key === "Escape") {
             onClose();
         }
@@ -42,7 +51,10 @@ export default function NewChatModal({ isOpen, onClose, onCreate }: { isOpen: bo
                             type="text"
                             className={styles.input}
                             value={title}
-                            onChange={(e) => setTitle(e.target.value)}
+                            onChange={(e) => {
+                                setTitle(e.target.value);
+                                setTitleEdited(true);
+                            }}
                             placeholder="e.g. Debugging Production Pods..."
                             autoFocus
                             onKeyDown={handleKeyDown}
@@ -52,7 +64,7 @@ export default function NewChatModal({ isOpen, onClose, onCreate }: { isOpen: bo
 
                 <div className={styles.footer}>
                     <button className={styles.cancelBtn} onClick={onClose}>Cancel</button>
-                    <button className={styles.saveBtn} onClick={() => onCreate(title)}>Create Session</button>
+                    <button className={styles.saveBtn} onClick={createSession}>Create Session</button>
                 </div>
             </div>
         </div>

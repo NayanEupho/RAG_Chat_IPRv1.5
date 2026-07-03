@@ -27,9 +27,9 @@ import ModeSelector, { InteractionMode } from './ModeSelector';
 
 export default function ChatInterface() {
     const {
-        messages, setMessages, sendMessage, loading,
+        messages, sendMessage, loading,
         sessionId, stopGeneration, fetchDocuments,
-        setSessionId, loadHistory
+        setSessionId, loadHistory, startEmptySession
     } = useChat();
 
     const bottomRef = useRef<HTMLDivElement>(null);
@@ -60,6 +60,7 @@ export default function ChatInterface() {
     // @Mentions State
     const [allDocs, setAllDocs] = useState<string[]>([]);
     const [inputValue, setInputValue] = useState('');
+    const [kbSearch, setKbSearch] = useState('');
     const [showMentions, setShowMentions] = useState(false);
     const [mentionQuery, setMentionQuery] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
@@ -113,12 +114,12 @@ export default function ChatInterface() {
         const handleSessionDeleted = () => {
             localStorage.removeItem('rag_session_id');
             setSessionId('');
-            setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }]);
+            startEmptySession('');
             router.push('/');
         };
         window.addEventListener('session-deleted', handleSessionDeleted);
         return () => window.removeEventListener('session-deleted', handleSessionDeleted);
-    }, [router, setSessionId, setMessages]);
+    }, [router, setSessionId, startEmptySession]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (showMentions) {
@@ -351,7 +352,8 @@ export default function ChatInterface() {
         setModalTitle('Embedded Knowledge Base');
         setModalType('docs');
         setIsModalOpen(true);
-        setModalContent('loading');
+        setKbSearch('');
+        setModalContent(allDocs);
         const docs = await fetchDocuments();
         setAllDocs(docs); // Sync while we are at it
         setModalContent(docs);
@@ -409,6 +411,53 @@ export default function ChatInterface() {
         return matches && !isAlreadyTagged;
     }).slice(0, 10);
 
+    const fuzzyFileMatch = (doc: string, query: string) => {
+        const normalizedDoc = doc.toLowerCase();
+        const normalizedQuery = query.trim().toLowerCase();
+        if (!normalizedQuery) return true;
+        if (normalizedDoc.includes(normalizedQuery)) return true;
+        let cursor = 0;
+        for (const char of normalizedQuery.replace(/[\s._-]+/g, '')) {
+            cursor = normalizedDoc.replace(/[\s._-]+/g, '').indexOf(char, cursor);
+            if (cursor === -1) return false;
+            cursor += 1;
+        }
+        return true;
+    };
+
+    const modalDocs = Array.isArray(modalContent) ? modalContent as string[] : [];
+    const filteredModalDocs = modalDocs.filter(doc => fuzzyFileMatch(doc, kbSearch));
+
+    const renderUserMessage = (content: string) => {
+        const matches: Array<{ start: number; end: number; doc: string }> = [];
+        for (const doc of [...allDocs].sort((a, b) => b.length - a.length)) {
+            const needle = `@${doc}`.toLowerCase();
+            let cursor = content.toLowerCase().indexOf(needle);
+            while (cursor !== -1) {
+                matches.push({ start: cursor, end: cursor + doc.length + 1, doc });
+                cursor = content.toLowerCase().indexOf(needle, cursor + needle.length);
+            }
+        }
+        matches.sort((a, b) => a.start - b.start);
+        const nonOverlapping = matches.filter((match, index, arr) => index === 0 || match.start >= arr[index - 1].end);
+        if (nonOverlapping.length === 0) return content;
+
+        const parts: React.ReactNode[] = [];
+        let cursor = 0;
+        nonOverlapping.forEach((match, idx) => {
+            if (match.start > cursor) parts.push(content.slice(cursor, match.start));
+            parts.push(
+                <span className="user-file-pill" key={`${match.doc}-${idx}`}>
+                    <FileText size={13} />
+                    {match.doc}
+                </span>
+            );
+            cursor = match.end;
+        });
+        if (cursor < content.length) parts.push(content.slice(cursor));
+        return parts;
+    };
+
 
 
     return (
@@ -420,7 +469,7 @@ export default function ChatInterface() {
                     // Client-side navigation
                     setSessionId(id);
                     if (options?.loadHistory === false) {
-                        setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }]);
+                        startEmptySession(id);
                     } else {
                         loadHistory(id);
                     }
@@ -439,7 +488,7 @@ export default function ChatInterface() {
                             const sourceList = msg.sources || [];
 
                             return (
-                            <div key={idx} className={`message-row ${msg.role === 'user' ? 'user-row' : 'bot-row'} animate-fade-in-up`}>
+                            <div key={idx} className={`message-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`}>
                                 <div className={`message-bubble ${msg.role}`}>
                                     {msg.role === 'bot' && (
                                         <>
@@ -477,6 +526,9 @@ export default function ChatInterface() {
                                     )}
 
                                     <div className="markdown-content">
+                                        {msg.role === 'user' ? (
+                                            <div className="user-message-content">{renderUserMessage(msg.content)}</div>
+                                        ) : (
                                         <ReactMarkdown
                                             remarkPlugins={[remarkGfm]}
                                             components={{
@@ -531,6 +583,7 @@ export default function ChatInterface() {
                                         >
                                             {msg.content}
                                         </ReactMarkdown>
+                                        )}
                                     </div>
 
                                     {msg.role === 'bot' && sourceList.length > 0 && (
@@ -748,14 +801,21 @@ export default function ChatInterface() {
                                     <div style={{ height: '20px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}></div>
                                 </div>
                             ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' }}>
-                                    {modalContent && modalContent.length > 0 ? (
-                                        modalContent.map((doc: string, i: number) => (
+                                <div className="kb-modal-content">
+                                    <input
+                                        className="kb-search-input"
+                                        value={kbSearch}
+                                        onChange={(e) => setKbSearch(e.target.value)}
+                                        placeholder="Search documents..."
+                                        autoFocus
+                                    />
+                                    <div className="kb-doc-grid">
+                                    {filteredModalDocs.length > 0 ? (
+                                        filteredModalDocs.map((doc: string, i: number) => (
                                             <div
                                                 key={i}
-                                                className="animate-fade-in-up dashboard-file-card"
+                                                className="dashboard-file-card"
                                                 style={{
-                                                    animationDelay: `${i * 0.05}s`,
                                                     cursor: 'pointer'
                                                 }}
                                                 onClick={() => handleOpenFile(doc)}
@@ -773,9 +833,10 @@ export default function ChatInterface() {
                                         ))
                                     ) : (
                                         <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--fg-muted)', padding: '2rem' }}>
-                                            No documents indexed yet.
+                                            {modalDocs.length > 0 ? 'No documents matched.' : 'No documents indexed yet.'}
                                         </div>
                                     )}
+                                    </div>
                                 </div>
                             )}
                         </div>

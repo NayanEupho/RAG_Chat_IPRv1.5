@@ -13,6 +13,7 @@ interface Session {
     session_id: string;
     title: string;
     updated_at: string;
+    auto_title_eligible?: number;
 }
 
 interface SystemStatus {
@@ -90,39 +91,40 @@ export default function Sidebar({
             setSystemHealth(false);
         }
     }, [getApiBase, isLoading]);
-    const handleCreateSession = async (title: string) => {
-        const tempId = `temp_${Date.now()}`;
+    const handleCreateSession = async (title: string, autoTitleEligible: boolean) => {
+        const sessionId = `web_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
         const newSession: Session = {
-            session_id: tempId,
+            session_id: sessionId,
             title: title || 'New Conversation',
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            auto_title_eligible: autoTitleEligible ? 1 : 0
         };
 
-        // 1. Optimistic Update: Add to list immediately
-        setSessions(prev => [newSession, ...prev]);
+        setSessions(prev => [newSession, ...prev.filter(s => s.session_id !== sessionId)]);
         setIsNewChatModalOpen(false);
-        onSelectSession(tempId, { loadHistory: false });
+        onSelectSession(sessionId, { loadHistory: false });
 
         try {
             const res = await fetch(`${getApiBase()}/sessions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: title || 'New Conversation' }),
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    title: title || 'New Conversation',
+                    auto_title_eligible: autoTitleEligible
+                }),
                 credentials: 'include'
             });
             const data = await res.json();
 
             if (data && data.session_id) {
-                // 2. Confirm Update: Replace temp with real ID
-                setSessions(prev => prev.map(s => s.session_id === tempId ? { ...s, session_id: data.session_id } : s));
-                onSelectSession(data.session_id, { loadHistory: false });
+                setSessions(prev => prev.map(s => s.session_id === sessionId ? { ...s, ...data } : s));
             } else {
-                // Revert on failure
-                setSessions(prev => prev.filter(s => s.session_id !== tempId));
+                setSessions(prev => prev.filter(s => s.session_id !== sessionId));
             }
         } catch (err) {
             console.error("Failed to create session", err);
-            setSessions(prev => prev.filter(s => s.session_id !== tempId));
+            setSessions(prev => prev.filter(s => s.session_id !== sessionId));
         }
     };
 
@@ -166,6 +168,20 @@ export default function Sidebar({
 
         return () => clearInterval(interval);
     }, [fetchSessions, checkHealth]);
+
+    useEffect(() => {
+        const handleTitleUpdated = (event: Event) => {
+            const custom = event as CustomEvent<{ session_id: string; title: string }>;
+            if (!custom.detail?.session_id || !custom.detail?.title) return;
+            setSessions(prev => prev.map(session =>
+                session.session_id === custom.detail.session_id
+                    ? { ...session, title: custom.detail.title, auto_title_eligible: 0 }
+                    : session
+            ));
+        };
+        window.addEventListener('session-title-updated', handleTitleUpdated);
+        return () => window.removeEventListener('session-title-updated', handleTitleUpdated);
+    }, []);
 
     if (!mounted) return null;
 
@@ -216,7 +232,9 @@ export default function Sidebar({
                         {sortedSessions.map(s => (
                                 <div key={s.session_id} className="session-item-wrapper">
                                     <button
-                                        onClick={() => onSelectSession(s.session_id)}
+                                        onClick={() => {
+                                            if (s.session_id !== currentSessionId) onSelectSession(s.session_id);
+                                        }}
                                         className={`session-btn ${currentSessionId === s.session_id ? 'active' : ''}`}
                                     >
                                         <div className="session-title">{s.title}</div>

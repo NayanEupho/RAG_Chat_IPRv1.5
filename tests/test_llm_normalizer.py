@@ -69,6 +69,8 @@ def test_normalizer_uses_separate_normalization_model(monkeypatch):
     config_module._runtime_config.main_model = OllamaConfig(host="http://main-host:11434", model_name="main-model")
     config_module._runtime_config.embedding_model = OllamaConfig(host="http://embed-host:11434", model_name="embed-model")
     config_module._runtime_config.normalization_model = OllamaConfig(host="http://norm-host:11434", model_name="norm-model")
+    monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-host:11434")
+    monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-model")
     monkeypatch.setenv("INGEST_NORMALIZE_MIN_WORD_RATIO", "0")
 
     normalizer = LlmMarkdownNormalizer(
@@ -81,6 +83,44 @@ def test_normalizer_uses_separate_normalization_model(monkeypatch):
     assert calls[1]["model"] == "norm-model"
     assert result.manifest["model"] == "norm-model"
     assert result.manifest["host"] == "http://norm-host:11434"
+
+
+def test_normalizer_uses_explicit_batch_model_config(monkeypatch):
+    from backend import config as config_module
+    from backend.config import OllamaConfig
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, host):
+            calls.append({"host": host})
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            return {"message": {"content": "alpha beta gamma delta epsilon zeta eta theta iota kappa"}}
+
+    config_module._runtime_config.main_model = OllamaConfig(host="http://main-host:11434", model_name="main-model")
+    config_module._runtime_config.embedding_model = OllamaConfig(host="http://embed-host:11434", model_name="embed-model")
+    config_module._runtime_config.normalization_model = OllamaConfig(host="http://runtime-norm:11434", model_name="runtime-norm")
+    monkeypatch.setenv("INGEST_NORMALIZE_MIN_WORD_RATIO", "0")
+
+    normalizer = LlmMarkdownNormalizer(
+        NormalizationOptions(enabled=True, batch_chars=1000, min_word_ratio=0),
+        client_factory=FakeClient,
+    )
+    result = normalizer.normalize(
+        "alpha beta gamma delta",
+        filename="sample.pdf",
+        doc_type="general",
+        parser="docling",
+        model_config={"model_id": "batch-norm", "endpoint": "http://batch-norm:11434", "display_name": "Batch Norm"},
+    )
+
+    assert calls[0]["host"] == "http://batch-norm:11434"
+    assert calls[1]["model"] == "batch-norm"
+    assert result.manifest["model"] == "batch-norm"
+    assert result.manifest["host"] == "http://batch-norm:11434"
+    assert result.manifest["model_source"] == "batch_config"
 
 
 def test_save_parse_artifacts_writes_raw_normalized_and_clean_manifest(tmp_path):

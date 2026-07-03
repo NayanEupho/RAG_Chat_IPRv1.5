@@ -79,7 +79,7 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
     """
     Streaming chat endpoint with History Logging.
     """
-    from backend.state.history import add_message, create_session, is_session_owner, get_session_owner
+    from backend.state.history import add_message, create_session, get_recent_targeted_docs, get_session_owner
     
     # Ensure session exists
     # Check ownership (skip in anonymous mode)
@@ -93,7 +93,8 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
     config = {"configurable": {"thread_id": request_body.session_id}}
     inputs = {
         "messages": [HumanMessage(content=request_body.message)],
-        "mode": request_body.mode
+        "mode": request_body.mode,
+        "last_targeted_docs": get_recent_targeted_docs(request_body.session_id),
     }
 
     async def sse_generator():
@@ -194,6 +195,16 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             final_docs = final_state.values.get("documents", [])
             targeted_docs = final_state.values.get("targeted_docs", [])
             retrieval_metrics = final_state.values.get("retrieval_metrics", {})
+            auto_session_title = None
+            try:
+                from backend.state.history import get_session, update_session_title, concise_title_from_exchange
+                session = get_session(request_body.session_id)
+                if session and int(session.get("auto_title_eligible") or 0) == 1 and full_response.strip():
+                    auto_session_title = concise_title_from_exchange(request_body.message, full_response)
+                    update_session_title(request_body.session_id, auto_session_title, user_id=user.user_id)
+                    logger.info(f"[STREAM] Auto-titled session {request_body.session_id}: {auto_session_title}")
+            except Exception as e:
+                logger.warning(f"[STREAM] Failed to auto-title session: {e}")
             
             # Pass documents exactly as retrieved
             deduped_docs = final_docs
@@ -213,7 +224,8 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                 "targeted_docs": targeted_docs,
                 "ttft_ms": timings["ttft_ms"],
                 "timings": timings,
-                "retrieval_metrics": retrieval_metrics
+                "retrieval_metrics": retrieval_metrics,
+                "session_title": auto_session_title,
             })
             yield f"event: end\ndata: {metadata}\n\n"
 
@@ -256,12 +268,33 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
 
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
+    session_id: Optional[str] = None
+    auto_title_eligible: bool = False
+
+class UpdateSessionTitleRequest(BaseModel):
+    title: str
 
 @router.post("/sessions")
 def create_session_endpoint(request: CreateSessionRequest, user: SAMLUser = Depends(get_current_user)):
     """Create a new chat session."""
     from backend.state.history import create_new_session
-    return create_new_session(request.title, user_id=user.user_id)
+    return create_new_session(
+        request.title,
+        user_id=user.user_id,
+        session_id=request.session_id,
+        auto_title_eligible=request.auto_title_eligible,
+    )
+
+@router.patch("/sessions/{session_id}/title")
+def update_session_title_endpoint(session_id: str, request: UpdateSessionTitleRequest, user: SAMLUser = Depends(get_current_user)):
+    """Update a session title."""
+    from backend.state.history import update_session_title
+    try:
+        return update_session_title(session_id, request.title, user_id=user.user_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 @router.get("/sessions")
 def get_sessions(user: SAMLUser = Depends(get_current_user)):

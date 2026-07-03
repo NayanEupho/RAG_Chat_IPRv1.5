@@ -25,6 +25,7 @@ export function useChat() {
   const [sessionId, setSessionId] = useState<string>('');
   const abortControllerRef = useRef<AbortController | null>(null);
   const historyRequestRef = useRef(0);
+  const historyCacheRef = useRef<Map<string, Interaction[]>>(new Map());
 
   const getApiBase = useCallback(() => {
     return "/api";
@@ -63,6 +64,11 @@ export function useChat() {
       return;
     }
 
+    const cached = historyCacheRef.current.get(sid);
+    if (cached) {
+      setMessages(cached);
+    }
+
     try {
       const res = await fetch(`${getApiBase()}/history/${sid}`, { credentials: 'include' });
       const data = await res.json();
@@ -85,9 +91,12 @@ export function useChat() {
           ttft: m.metadata?.ttft,
           thoughts: (m.thoughts || []) as { type: 'thought' | 'tool_call' | 'error' | 'status' | 'result', content: string }[]
         }));
+        historyCacheRef.current.set(sid, mapped);
         setMessages(mapped);
       } else {
-        setMessages([{ role: 'bot', content: 'Hello! I am your IPR Assistant. Chat history is empty.' }]);
+        const emptyHistory = [{ role: 'bot' as const, content: 'Hello! I am your IPR Assistant. Chat history is empty.' }];
+        historyCacheRef.current.set(sid, emptyHistory);
+        setMessages(emptyHistory);
       }
     } catch {
       if (requestId !== historyRequestRef.current) return;
@@ -115,6 +124,13 @@ export function useChat() {
       setMessageQueue([]);
     }
   };
+
+  const startEmptySession = useCallback((sid: string) => {
+    historyRequestRef.current += 1;
+    const welcome = [{ role: 'bot' as const, content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }];
+    if (sid) historyCacheRef.current.set(sid, welcome);
+    setMessages(welcome);
+  }, []);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -174,6 +190,7 @@ export function useChat() {
       let animationFrame: number | null = null;
       let tokenFlushTimer: number | null = null;
       let lastTokenFlushAt = 0;
+      let streamEnded = false;
 
       const flushTokenContent = () => {
         animationFrame = null;
@@ -259,6 +276,7 @@ export function useChat() {
                 scheduleTokenFlush();
               } catch { }
             } else if (currentEvent === 'end') {
+              streamEnded = true;
               try {
                 if (animationFrame !== null) {
                   window.cancelAnimationFrame(animationFrame);
@@ -279,13 +297,20 @@ export function useChat() {
                         intent: metadata.intent,
                         sources: metadata.sources,
                         targeted_docs: metadata.targeted_docs,
+                        ttft: next[i].ttft ?? metadata.ttft_ms,
                         status: undefined
                       };
                       break;
                     }
                   }
+                  historyCacheRef.current.set(sid, next);
                   return next;
                 });
+                if (metadata.session_title) {
+                  window.dispatchEvent(new CustomEvent('session-title-updated', {
+                    detail: { session_id: sid, title: metadata.session_title }
+                  }));
+                }
               } catch { }
             } else if (currentEvent === 'error') {
               toast.error(`System Error: ${eventData}`);
@@ -306,6 +331,9 @@ export function useChat() {
             }
           }
         }
+      }
+      if (!streamEnded) {
+        flushTokenContent();
       }
     } catch (error: unknown) {
       if (error instanceof Error && error.name !== 'AbortError') {
@@ -346,6 +374,6 @@ export function useChat() {
   return {
     messages, setMessages, sendMessage, loading, currentStatus,
     sessionId, setSessionId, loadHistory, stopGeneration,
-    fetchDocuments, messageQueue
+    fetchDocuments, messageQueue, startEmptySession
   };
 }
