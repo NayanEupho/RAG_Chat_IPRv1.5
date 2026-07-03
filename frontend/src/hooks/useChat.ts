@@ -31,6 +31,20 @@ export function useChat() {
     return "/api";
   }, []);
 
+  const warmup = useCallback((mode: 'all' | 'chat' | 'rag' | 'doc' = 'all', params?: { filename?: string; session_id?: string }) => {
+    const query = new URLSearchParams({ mode });
+    if (params?.filename) query.set('filename', params.filename);
+    if (params?.session_id) query.set('session_id', params.session_id);
+
+    fetch(`${getApiBase()}/warmup?${query.toString()}`, {
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true
+    }).catch(() => {
+      // Warmup is best-effort; live chat remains the source of truth.
+    });
+  }, [getApiBase]);
+
   const getStreamingBackendBase = useCallback(() => {
     const configured = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
@@ -112,7 +126,8 @@ export function useChat() {
     }
     setSessionId(stored);
     loadHistory(stored);
-  }, [loadHistory]);
+    warmup('all', { session_id: stored });
+  }, [loadHistory, warmup]);
 
   const stopGeneration = () => {
     if (abortControllerRef.current) {
@@ -130,7 +145,8 @@ export function useChat() {
     const welcome = [{ role: 'bot' as const, content: 'Hello! I am your IPR Assistant. Ask me anything or upload documents.', thoughts: [] }];
     if (sid) historyCacheRef.current.set(sid, welcome);
     setMessages(welcome);
-  }, []);
+    if (sid) warmup('chat', { session_id: sid });
+  }, [warmup]);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -374,6 +390,6 @@ export function useChat() {
   return {
     messages, setMessages, sendMessage, loading, currentStatus,
     sessionId, setSessionId, loadHistory, stopGeneration,
-    fetchDocuments, messageQueue, startEmptySession
+    fetchDocuments, messageQueue, startEmptySession, warmup
   };
 }

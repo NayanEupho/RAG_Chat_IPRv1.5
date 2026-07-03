@@ -24,9 +24,9 @@ def extract_text_from_pdf_binary(file_path):
                 for tm in t_matches:
                     try:
                         extracted_text.append(tm.decode('utf-8', errors='ignore'))
-                    except:
+                    except Exception:
                         pass
-            except:
+            except Exception:
                 # Not a zlib stream or failed to decompress
                 pass
         
@@ -36,7 +36,7 @@ def extract_text_from_pdf_binary(file_path):
         for rt in raw_text:
              try:
                 extracted_text.append(rt.decode('utf-8', errors='ignore'))
-             except:
+             except Exception:
                 pass
 
         return " ".join(extracted_text)

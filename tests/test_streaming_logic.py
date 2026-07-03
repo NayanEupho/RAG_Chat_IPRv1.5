@@ -8,7 +8,6 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 from langchain_core.messages import AIMessageChunk
-from langchain_core.runnables import RunnableLambda
 
 # Mock Logic to simulate "Streaming" from a Node
 async def mock_generator_node(input):
@@ -67,8 +66,6 @@ async def test_sse_streaming_logic():
         # 2. Import the SSE Generator (Logic from routes.py, extracted or reconstructed)
         # Since sse_generator is inside the endpoint function, we'll manually replicate the iteration logic
         # to verify the "yield" happens inside the loop.
-        
-        from backend.api.routes import ChatRequest
         
         # Replicated Logic from routes.py -> sse_generator
         # We want to time the yields.

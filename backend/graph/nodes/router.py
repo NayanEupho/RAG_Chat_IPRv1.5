@@ -10,7 +10,6 @@ The 'Air Traffic Control' of the graph. It uses a hierarchy of decision layers:
 """
 
 from backend.graph.state import AgentState
-from backend.llm.client import OllamaClientWrapper
 from backend.graph.nodes.constants import CHAT_KEYWORDS, RAG_KEYWORDS
 from langchain_core.messages import HumanMessage, AIMessage
 import re

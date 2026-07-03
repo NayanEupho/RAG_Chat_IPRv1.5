@@ -1,5 +1,7 @@
-try:
-    from langchain_community.document_loaders import UnstructuredFileLoader
+import importlib.util
+
+
+if importlib.util.find_spec("langchain_community.document_loaders"):
     print("UnstructuredFileLoader available")
-except ImportError:
+else:
     print("UnstructuredFileLoader NOT available")

@@ -70,7 +70,7 @@ async def detect_model_capabilities(config) -> None:
 
     # --- Auto-detect thinking model ---
     if no_thinking_env and no_thinking_env.lower() == "true":
-        logger.info(f"[DETECT] RAG_NO_THINKING=true — skipping thinking auto-detect")
+        logger.info("[DETECT] RAG_NO_THINKING=true — skipping thinking auto-detect")
         return
 
     if architecture:

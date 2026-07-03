@@ -13,7 +13,6 @@ import os
 import sys
 import pytest
 import shutil
-import asyncio
 from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
 
@@ -21,7 +20,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from backend.app import app
 from backend.config import set_main_model, set_embedding_model
-from backend.rag.store import get_vector_store
 from backend.llm.client import OllamaClientWrapper
 
 TEST_DB_DIR = "tests/e2e_chroma"
@@ -37,7 +35,8 @@ EXPECTED_INDEXED_DOCS = {
 if os.path.exists(TEST_DB_DIR):
     try:
         shutil.rmtree(TEST_DB_DIR) 
-    except: pass
+    except Exception:
+        pass
 
 # 1. Setup Config & Store
 set_main_model("http://mock-host:11434", "mock-chat")

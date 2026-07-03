@@ -40,7 +40,7 @@ def test_config_centralization():
     cfg = get_config()
     
     checks = [
-        (cfg.docling_force_cpu == True, "docling_force_cpu"),
+        (cfg.docling_force_cpu, "docling_force_cpu"),
         (cfg.retrieval_top_k == 12, "retrieval_top_k"),
         (cfg.rag_confidence_threshold == 0.92, "rag_confidence_threshold"),
         (cfg.vlm_model == "llava:latest", "vlm_model")
@@ -74,16 +74,7 @@ def test_ingestion_refinements():
 
 async def test_planner_fix():
     logger.info("\n--- Testing Planner Bug Fix ---")
-    from backend.graph.nodes.planner import planner_node
-    from backend.graph.state import AgentState
-    from langchain_core.messages import HumanMessage
-    
-    # Mock state
-    state: AgentState = {
-        "messages": [HumanMessage(content="Hello world")],
-        "mode": "auto"
-    }
-    
+
     # The planner_node uses store.query internally.
     # We just want to ensure it doesn't raise NameError: distances is not defined
     try:

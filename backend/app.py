@@ -5,16 +5,22 @@ Initializes the web server, handles CORS, and manages the lifecycle of backgroun
 The application entry point includes the automatic startup of the file watchdog service.
 """
 
-from fastapi import FastAPI
-from contextlib import asynccontextmanager
-from backend.config import get_config
+import asyncio
 import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.admin.router import router as admin_router
+from backend.api.routes import router as api_router
+from backend.config import get_config
+from backend.ingestion.watcher import WatchdogService
+from backend.saml.routes import router as saml_router
 
 # Configure application-wide logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rag_chat_ipr")
-
-from backend.ingestion.watcher import WatchdogService
 
 # Global service instance for the file system monitor
 watchdog_service = None
@@ -45,21 +51,14 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Model capability detection failed: {e}")
     logger.info(f"Post-detection — Context Window: {config.model_context_window}, Is Thinking: {config.is_thinking_model}")
 
-    # Pre-warm the LLM model to avoid loading latency on first user query
+    # Initialize the LLM client without blocking API startup. The actual
+    # model/vector warmup is scheduled below as a best-effort background task.
     try:
         from backend.llm.client import OllamaClientWrapper
-        import time
-        warm_start = time.monotonic()
-        chat_model = OllamaClientWrapper.get_chat_model()
-        # Send a minimal request to force model load into GPU memory
-        dummy = await chat_model.ainvoke([
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Warmup"}
-        ])
-        warm_ms = int((time.monotonic() - warm_start) * 1000)
-        logger.info(f"Model pre-warmed in {warm_ms}ms (keep_alive=-1)")
+        OllamaClientWrapper.get_chat_model()
+        logger.info("Chat model client initialized; model warmup scheduled in background")
     except Exception as e:
-        logger.warning(f"Model pre-warm failed: {e}")
+        logger.warning(f"Chat model client initialization failed: {e}")
 
     # Pre-warm Reranker to avoid cold-start latency on first query
     try:
@@ -98,6 +97,12 @@ async def lifespan(app: FastAPI):
     global watchdog_service
     watchdog_service = WatchdogService(watch_dir="upload_docs")
     watchdog_service.start()
+
+    try:
+        from backend.llm.warmup import run_warmup
+        app.state.model_warmup_task = asyncio.create_task(run_warmup(mode="all", source="startup"))
+    except Exception as e:
+        logger.warning(f"Startup warmup scheduling failed: {e}")
     
     yield
     
@@ -110,8 +115,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Admin dashboard worker shutdown failed: {e}")
 
-from fastapi.middleware.cors import CORSMiddleware
-
 app = FastAPI(title="RAG Chat IPR", lifespan=lifespan)
 
 app.add_middleware(
@@ -122,13 +125,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from backend.api.routes import router as api_router
 app.include_router(api_router, prefix="/api")
 
-from backend.admin.router import router as admin_router
 app.include_router(admin_router, prefix="/api/v1")
 
-from backend.saml.routes import router as saml_router
 app.include_router(saml_router, prefix="/saml")
 
 # NEW: include SAML router

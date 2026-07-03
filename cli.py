@@ -8,14 +8,12 @@ Supports streaming responses, status updates, and session persistence.
 import asyncio
 import argparse
 import aiohttp
-import sys
 import os
 import json
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.live import Live
 from rich.spinner import Spinner
-from rich.text import Text
 from rich.panel import Panel
 
 # Initialize Rich console for beautiful terminal output
@@ -76,7 +74,8 @@ async def chat_loop(api_url: str):
                             
                             async for line in resp.content:
                                 decoded_line = line.decode('utf-8').strip()
-                                if not decoded_line: continue
+                                if not decoded_line:
+                                    continue
                                 
                                 # SSE Parsing
                                 if decoded_line.startswith("event:"):

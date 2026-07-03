@@ -7,7 +7,6 @@ Ensures that adjacent document chunks are correctly merged without breaking cont
 import unittest
 import sys
 import os
-from collections import defaultdict
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

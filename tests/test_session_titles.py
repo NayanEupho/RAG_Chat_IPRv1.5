@@ -6,6 +6,7 @@ def test_default_title_eligibility_and_concise_title():
 
     assert history.is_default_session_title("Session - 03:45 PM")
     assert not history.is_default_session_title("QLoRA author review")
+    assert history.concise_title_from_exchange("Hi", "Hello! How can I help you today?") == "New Chat"
 
     title = history.concise_title_from_exchange(
         "who are the authors of @Qlora_Paper.pdf?",

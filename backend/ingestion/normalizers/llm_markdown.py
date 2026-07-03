@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
 import ollama

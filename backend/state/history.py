@@ -4,7 +4,6 @@ import logging
 import threading
 import re
 from datetime import datetime
-from functools import lru_cache
 
 DB_PATH = "rag_chat_sessions.db"
 logger = logging.getLogger(__name__)
@@ -147,6 +146,11 @@ def is_default_session_title(title: str) -> bool:
 
 def concise_title_from_exchange(user_message: str, bot_response: str) -> str:
     """Create a deterministic, low-latency title without an LLM call."""
+    normalized_user = re.sub(r"[^a-z0-9\s]", " ", (user_message or "").lower()).strip()
+    normalized_user = re.sub(r"\s+", " ", normalized_user)
+    if normalized_user in {"hi", "hello", "hey", "hii", "hiii", "good morning", "good afternoon", "good evening"}:
+        return "New Chat"
+
     text = f"{user_message or ''} {bot_response or ''}"
     text = re.sub(r"@\S+", lambda m: m.group(0)[1:].rsplit(".", 1)[0], text)
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9&/-]*", text)
@@ -241,7 +245,7 @@ def get_session_history(session_id: str):
         if 'thoughts' in d and d['thoughts']:
             try:
                 d['thoughts'] = json.loads(d['thoughts'])
-            except:
+            except Exception:
                 d['thoughts'] = []
         else:
              d['thoughts'] = []

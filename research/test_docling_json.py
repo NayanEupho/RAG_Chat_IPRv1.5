@@ -1,5 +1,4 @@
 from docling.document_converter import DocumentConverter
-import os
 import json
 
 def test_json(file_path):

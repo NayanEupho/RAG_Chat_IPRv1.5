@@ -29,7 +29,7 @@ export default function ChatInterface() {
     const {
         messages, sendMessage, loading,
         sessionId, stopGeneration, fetchDocuments,
-        setSessionId, loadHistory, startEmptySession
+        setSessionId, loadHistory, startEmptySession, warmup
     } = useChat();
 
     const bottomRef = useRef<HTMLDivElement>(null);
@@ -247,6 +247,7 @@ export default function ChatInterface() {
 
         setInputValue(newValue);
         setShowMentions(false);
+        warmup('doc', { filename: docName, session_id: sessionId });
         textarea.focus();
 
         // Move cursor to after the inserted mention

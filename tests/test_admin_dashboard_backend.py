@@ -276,7 +276,7 @@ def test_effective_config_applies_per_document_ingestion_type(isolated_admin):
 def test_list_batches_accepts_comma_separated_statuses(isolated_admin):
     first = _create_document(isolated_admin, batch_id="batch_complete", document_id="doc_complete")
     second = _create_document(isolated_admin, batch_id="batch_failed", document_id="doc_failed")
-    third = _create_document(isolated_admin, batch_id="batch_draft", document_id="doc_draft")
+    _create_document(isolated_admin, batch_id="batch_draft", document_id="doc_draft")
     repo.set_document_status(first["document_id"], DocumentStatus.INDEXED.value, chunk_count=1, indexed_at="2026-06-26T00:00:00Z")
     repo.set_document_status(second["document_id"], DocumentStatus.PARSE_FAILED.value, error_summary="Parse failed")
 
@@ -1621,7 +1621,7 @@ def test_reject_review_deletes_only_rejected_document_artifacts_and_keeps_audit(
         raw_path.write_text("raw", encoding="utf-8")
         repo.update_parse_variant(variant["variant_id"], status="COMPLETE", parsed_md_path=str(parsed_path), raw_md_path=str(raw_path))
         repo.set_document_status(document["document_id"], DocumentStatus.REVIEW_PENDING.value)
-    reject_review = repo.create_or_update_review(
+    repo.create_or_update_review(
         document_id="doc_reject",
         selected_parse_variant_id=repo.get_document("doc_reject")["parse_variants"][0]["variant_id"],
         selected_norm_variant_id=None,

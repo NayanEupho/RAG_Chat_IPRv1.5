@@ -2,10 +2,9 @@ import os
 import time
 import shutil
 import logging
-import threading
 from dotenv import load_dotenv
 load_dotenv()
-from backend.ingestion.watcher import WatchdogService
+from backend.ingestion.watcher import WatchdogService  # noqa: E402
 
 # Configure logging to see output
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')

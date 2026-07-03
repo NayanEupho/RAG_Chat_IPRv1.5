@@ -118,7 +118,7 @@ async def get_current_user(request: Request) -> SAMLUser:
     """Dependency – raises 401 when no valid session exists."""
     from backend.config import get_config
     if not get_config().use_saml_login:
-        logger.info(f"Auth Bypass: USE_SAML_LOGIN=false. Returning anonymous user.")
+        logger.info("Auth Bypass: USE_SAML_LOGIN=false. Returning anonymous user.")
         return SAMLUser(user_id="anonymous", display_name="Anonymous User")
         
     user = get_session_from_cookie(request)

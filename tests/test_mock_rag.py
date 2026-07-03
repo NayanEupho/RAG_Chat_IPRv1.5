@@ -8,7 +8,6 @@ import pytest
 import logging
 import os
 from unittest.mock import MagicMock, patch, AsyncMock
-from backend.graph.state import AgentState
 from backend.config import AppConfig
 
 # Mock logger to avoid errors if nodes use it

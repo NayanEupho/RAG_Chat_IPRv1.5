@@ -5,7 +5,6 @@ Standalone script for calibrating Docling parameters (OCR markers, chunk boundar
 Used during Phase 4 development of the ingestion engine.
 """
 from docling.document_converter import DocumentConverter
-import sys
 import os
 
 def test_extraction(file_path):

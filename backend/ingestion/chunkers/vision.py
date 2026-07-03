@@ -213,7 +213,6 @@ class VisionChunker:
         ]
         non_empty_lines = [line for line in markdown.splitlines() if line.strip()]
         table_lines = [line for line in non_empty_lines if line.strip().startswith("|")]
-        heading_lines = [line for line in non_empty_lines if line.lstrip().startswith("#")]
         table_line_ratio = len(table_lines) / max(1, len(non_empty_lines))
         if len(numbered_table_lines) >= 2 and table_line_ratio >= 0.45:
             return True

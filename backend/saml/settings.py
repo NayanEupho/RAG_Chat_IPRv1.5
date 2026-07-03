@@ -1,3 +1,4 @@
+import os
 import secrets
 from functools import lru_cache
 
@@ -10,7 +11,6 @@ class SAMLSettings:
     """
 
     def __init__(self):
-        import os
         # ===== Service Provider (THIS APP) =====
         self.sp_entity_id = os.getenv(
             "SAML_SP_ENTITY_ID",

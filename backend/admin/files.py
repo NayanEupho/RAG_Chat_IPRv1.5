@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import BinaryIO
 
 from fastapi import HTTPException, UploadFile
 

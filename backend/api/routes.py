@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from backend.graph.workflow import build_graph
 from langchain_core.messages import HumanMessage, AIMessage
 # For SAML
@@ -9,8 +9,6 @@ from fastapi import Depends
 from backend.saml.auth import get_current_user, SAMLUser
 #end SAML
 
-import uuid
-import json
 import os
 import logging
 
@@ -98,6 +96,9 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
     }
 
     async def sse_generator():
+        from backend.llm.warmup import real_request_scope
+        request_scope = real_request_scope()
+        request_scope.__enter__()
         logger.info(f"[STREAM] Starting SSE generator for session {request_body.session_id}")
         full_response = ""
         final_intent = "unknown"
@@ -105,6 +106,7 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
         thoughts = []
         ttft_start = None
         ttft_logged = False
+        user_message_logged = False
         node_starts = {}
         node_timings = {}
         generator_start_ms = None
@@ -122,6 +124,15 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             
             import time
             ttft_start = time.monotonic()
+
+            requires_rag = request_body.mode.lower() == "rag" or "@" in request_body.message
+            if requires_rag:
+                from backend.llm.health import ModelUnavailableError, ensure_rag_ready
+                try:
+                    await ensure_rag_ready()
+                except ModelUnavailableError as e:
+                    yield f"event: error\ndata: {str(e)}\n\n"
+                    return
             
             async for event in get_graph().astream_events(inputs, config=config, version="v1"):
                 # CHECK FOR DISCONNECTION
@@ -181,6 +192,7 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                                 logger.warning(f"[TTFT] First token at {ttft_ms}ms for session {request_body.session_id}")
                                 try:
                                     add_message(request_body.session_id, "user", request_body.message)
+                                    user_message_logged = True
                                 except Exception as e:
                                     logger.warning(f"[STREAM] Failed to log user message: {e}")
                             clean_token = json.dumps(chunk.content)
@@ -196,13 +208,38 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             targeted_docs = final_state.values.get("targeted_docs", [])
             retrieval_metrics = final_state.values.get("retrieval_metrics", {})
             auto_session_title = None
+            if not full_response:
+                final_messages = final_state.values.get("messages", [])
+                final_message = final_messages[-1] if final_messages else None
+                final_content = final_message.content if isinstance(final_message, AIMessage) else ""
+                if final_content:
+                    import json
+                    full_response = final_content
+                    if not ttft_logged and ttft_start:
+                        ttft_logged = True
+                        ttft_ms = int((time.monotonic() - ttft_start) * 1000)
+                        generator_first_token_ms = ttft_ms
+                        if "generator" in node_timings:
+                            start_ms = node_timings["generator"].get("start_ms")
+                            if start_ms is not None:
+                                node_timings["generator"]["first_token_after_start_ms"] = ttft_ms - start_ms
+                        logger.warning(f"[TTFT] First token at {ttft_ms}ms for session {request_body.session_id}")
+                        if not user_message_logged:
+                            try:
+                                add_message(request_body.session_id, "user", request_body.message)
+                                user_message_logged = True
+                            except Exception as e:
+                                logger.warning(f"[STREAM] Failed to log user message: {e}")
+                    yield f"event: token\ndata: {json.dumps(final_content)}\n\n"
             try:
                 from backend.state.history import get_session, update_session_title, concise_title_from_exchange
                 session = get_session(request_body.session_id)
                 if session and int(session.get("auto_title_eligible") or 0) == 1 and full_response.strip():
-                    auto_session_title = concise_title_from_exchange(request_body.message, full_response)
-                    update_session_title(request_body.session_id, auto_session_title, user_id=user.user_id)
-                    logger.info(f"[STREAM] Auto-titled session {request_body.session_id}: {auto_session_title}")
+                    proposed_title = concise_title_from_exchange(request_body.message, full_response)
+                    if proposed_title != "New Chat":
+                        auto_session_title = proposed_title
+                        update_session_title(request_body.session_id, auto_session_title, user_id=user.user_id)
+                        logger.info(f"[STREAM] Auto-titled session {request_body.session_id}: {auto_session_title}")
             except Exception as e:
                 logger.warning(f"[STREAM] Failed to auto-title session: {e}")
             
@@ -254,8 +291,9 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
         except Exception as e:
             logger.error(f"[STREAM] Error in sse_generator: {e}")
             yield f"event: error\ndata: {str(e)}\n\n"
+        finally:
+            request_scope.__exit__(None, None, None)
 
-    from fastapi.responses import StreamingResponse
     return StreamingResponse(
         sse_generator(), 
         media_type="text/event-stream",
@@ -355,77 +393,62 @@ def get_config_route():
     except Exception as e:
         return {"error": f"Config error: {str(e)}"}
 
+
+async def _run_warmup_task(mode: str, filename: str | None, source: str) -> None:
+    try:
+        # Compile the graph before the first user stream without touching any
+        # session history or checkpointer thread.
+        get_graph()
+        from backend.llm.warmup import run_warmup
+        result = await run_warmup(mode=mode, filename=filename, source=source)
+        logger.info("[WARMUP] %s", result)
+    except Exception as e:
+        logger.info("[WARMUP] Background warmup skipped/failed: %s", e)
+
+
+@router.post("/warmup")
+async def warmup_endpoint(
+    background_tasks: BackgroundTasks,
+    mode: str = "all",
+    filename: Optional[str] = None,
+    session_id: Optional[str] = None,
+    _user: SAMLUser = Depends(get_current_user),
+):
+    """Start a best-effort warmup without blocking the caller."""
+    normalized_mode = (mode or "all").lower()
+    if normalized_mode not in {"all", "chat", "rag", "doc"}:
+        normalized_mode = "all"
+    background_tasks.add_task(_run_warmup_task, normalized_mode, filename, f"api:{session_id or 'global'}")
+    return {"status": "accepted", "mode": normalized_mode, "filename": filename}
+
+
+@router.get("/warmup")
+async def warmup_get_endpoint(
+    background_tasks: BackgroundTasks,
+    mode: str = "all",
+    filename: Optional[str] = None,
+    session_id: Optional[str] = None,
+    _user: SAMLUser = Depends(get_current_user),
+):
+    """GET alias for browser/proxy-friendly fire-and-forget warmups."""
+    return await warmup_endpoint(background_tasks, mode, filename, session_id, _user)
+
 @router.get("/status")
 async def status():
     """
-    Real-time health check for Ollama hosts and model availability.
-    Updated to use AsyncClient for non-blocking I/O.
+    Cached real-time health check for model query readiness.
     """
-    import httpx
-    from backend.config import get_config
-    
-    async def check_model_health_async(host: str, model_name: str) -> dict:
-        """Check if a specific model is available on a given Ollama host."""
-        result = {"healthy": False, "error": None}
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{host}/api/tags")
-                if response.status_code == 200:
-                    data = response.json()
-                    models = data.get("models", [])
-                    # Check if model_name is in the list (strip version tags for comparison)
-                    model_names = [m.get("name", "").split(":")[0] for m in models]
-                    model_base = model_name.split(":")[0]
-                    
-                    if model_base in model_names or model_name in [m.get("name", "") for m in models]:
-                        result["healthy"] = True
-                    else:
-                        result["error"] = f"Model '{model_name}' not found on host"
-                else:
-                    result["error"] = f"Host returned status {response.status_code}"
-        except httpx.ConnectError:
-            result["error"] = "Cannot connect to Ollama host"
-        except httpx.TimeoutException:
-            result["error"] = "Connection timed out"
-        except Exception as e:
-            result["error"] = str(e)
-        return result
-    
     try:
-        cfg = get_config()
-        
-        # Check Main and Embedding models in parallel
-        import asyncio
-        main_task = check_model_health_async(cfg.main_model.host, cfg.main_model.model_name) if cfg.main_model else None
-        embed_task = check_model_health_async(cfg.embedding_model.host, cfg.embedding_model.model_name) if cfg.embedding_model else None
-        
-        results = await asyncio.gather(*[t for t in [main_task, embed_task] if t])
-        
-        main_result = results[0] if main_task else {"healthy": False, "error": "Not configured"}
-        embed_result = results[1] if embed_task else {"healthy": False, "error": "Not configured"}
-        
-        # Determine overall status
-        if main_result["healthy"] and embed_result["healthy"]:
-            overall_status = "ok"
-        elif main_result["healthy"] or embed_result["healthy"]:
-            overall_status = "degraded"
-        else:
-            overall_status = "offline"
-        
-        return {
-            "status": overall_status,
-            "python_version": __import__("sys").version.split()[0],
-            "main_model_healthy": main_result["healthy"],
-            "main_model_error": main_result["error"],
-            "main_model_name": cfg.main_model.model_name if cfg.main_model else "Not Configured",
-            "embed_model_healthy": embed_result["healthy"],
-            "embed_model_error": embed_result["error"],
-            "embed_model_name": cfg.embedding_model.model_name if cfg.embedding_model else "Not Configured"
-        }
+        from backend.llm.health import get_model_health
+        snapshot = await get_model_health(force=False)
+        snapshot["python_version"] = __import__("sys").version.split()[0]
+        return snapshot
     except Exception as e:
         return {
             "status": "offline",
             "python_version": __import__("sys").version.split()[0],
+            "chat_available": False,
+            "rag_available": False,
             "main_model_healthy": False,
             "main_model_error": str(e),
             "embed_model_healthy": False,
@@ -461,7 +484,7 @@ async def get_file(filename: str):
                 break
             
     if not found_path or not os.path.exists(found_path):
-        raise HTTPException(status_code=404, detail=f"Document not found")
+        raise HTTPException(status_code=404, detail="Document not found")
         
     return FileResponse(found_path)
 

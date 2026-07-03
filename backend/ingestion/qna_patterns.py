@@ -5,7 +5,7 @@ This module provides regex patterns and utilities for detecting and parsing
 Q&A-style documents (FAQs, knowledge bases, etc.).
 """
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -70,10 +70,6 @@ def extract_qa_pairs(text: str, filename: str) -> List[Dict[str, Any]]:
     - start_pos: Character position in source
     """
     pairs = []
-    
-    # Track current section hierarchy
-    current_section = "Root"
-    header_stack = []
     
     # Find all questions
     question_matches = list(QUESTION_REGEX.finditer(text))

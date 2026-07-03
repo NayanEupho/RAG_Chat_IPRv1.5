@@ -6,7 +6,6 @@ ingestion worker pool to process them asynchronously.
 """
 
 import os
-import time
 import threading
 import logging
 import queue

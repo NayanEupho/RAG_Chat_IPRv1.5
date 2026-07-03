@@ -79,8 +79,10 @@ class ViterbiSegmenter:
 
     @lru_cache(maxsize=1024)
     def segment(self, text: str) -> str:
-        if not text: return ""
-        if len(text) < 3: return text
+        if not text:
+            return ""
+        if len(text) < 3:
+            return text
         
         # If the word is already valid, don't touch it (Split-Guard)
         if text.lower() in self.words:
@@ -209,7 +211,7 @@ class DocumentProcessor:
                 logger.info(f"[SMART OCR] Low text density ({len(text_content.strip())} chars). Treating as SCANNED.")
                 return True
             
-            logger.info(f"[SMART OCR] High text density detected. Treating as DIGITAL.")
+            logger.info("[SMART OCR] High text density detected. Treating as DIGITAL.")
             return False
             
         except Exception as e:
@@ -419,7 +421,7 @@ class DocumentProcessor:
 
                     # Tier 2 Rescue: Vision / OCR (If Tier 1 didn't solve it or wasn't applicable)
                     if not needs_ocr and quality_issues:
-                        logger.info(f"[VISION] Tier 1 failed or insufficient. escalating to Tier 2: Vision-First (Scale=3.0)...")
+                        logger.info("[VISION] Tier 1 failed or insufficient. escalating to Tier 2: Vision-First (Scale=3.0)...")
                         converter = self._get_converter(enable_ocr=True, force_ocr=True, ocr_scale=3.0)
                         result = converter.convert(file_path)
                         md_content = result.document.export_to_markdown()
@@ -968,7 +970,12 @@ class DocumentProcessor:
             return content
 
         lines = text.split('\n')
-        text = '\n'.join([repair_body_mashing(l) if not (l.strip().startswith('|') or l.strip().startswith('#')) else l for l in lines])
+        text = '\n'.join(
+            repair_body_mashing(line)
+            if not (line.strip().startswith('|') or line.strip().startswith('#'))
+            else line
+            for line in lines
+        )
         
         # 5. [Platinum Polish] Fix Mashed Words in Headers (Structural Layer)
         def repair_mashed_header(match):
@@ -1000,7 +1007,7 @@ class DocumentProcessor:
         # 5. [Platinum Polish] Strip redundant title repetitions at start
         lines = text.splitlines()
         if len(lines) > 20:
-            first_header = next((l for l in lines[:15] if l.startswith("#")), None)
+            first_header = next((line for line in lines[:15] if line.startswith("#")), None)
             if first_header:
                 # Look for the exact same header repeated within the next 80 lines
                 for i in range(lines.index(first_header) + 1, min(len(lines), 100)):
@@ -1046,7 +1053,6 @@ class DocumentProcessor:
             return ""
 
         def demote_based_on_numbering(match):
-            hashes = match.group(1)
             numbering = match.group(2)
             rest = match.group(3)
             

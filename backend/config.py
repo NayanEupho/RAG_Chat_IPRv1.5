@@ -100,9 +100,6 @@ class AppConfig(BaseModel):
     def docling_force_cpu(self) -> bool:
         """Backward-compatible alias for older tests/scripts."""
         return self.ingest_force_cpu
-
-import os
-
 # Singleton instance
 _runtime_config = AppConfig()
 

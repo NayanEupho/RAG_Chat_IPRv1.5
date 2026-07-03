@@ -7,7 +7,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from backend.graph.nodes.generate import _GENERATOR_SYSTEM_PROMPT, _build_message_list, _get_budgets, _SUMMARY_PREFIX, prepare_docs_for_generation, is_detail_request
+from backend.graph.nodes.generate import (
+    _GENERATOR_SYSTEM_PROMPT,
+    _SUMMARY_PREFIX,
+    _build_message_list,
+    _get_budgets,
+    generate_answer,
+    is_detail_request,
+    prepare_docs_for_generation,
+)
 from backend.graph.nodes.planner import (
     _ACRONYM_CACHE,
     _contains_keyword,
@@ -86,6 +94,24 @@ def test_detail_request_detection_expands_only_when_explicit():
     assert is_detail_request("Explain in detail how multi-head attention works")
     assert is_detail_request("Give a step by step explanation")
     assert not is_detail_request("What is this paper about?")
+
+
+@pytest.mark.asyncio
+async def test_simple_greeting_fast_path_skips_model_call():
+    with patch(
+        "backend.graph.nodes.generate.OllamaClientWrapper.get_chat_model",
+        side_effect=AssertionError("model should not be called for pure greetings"),
+    ):
+        result = await generate_answer({
+            "messages": [HumanMessage(content="Hi")],
+            "query": "Hi",
+            "intent": "chat",
+            "mode": "auto",
+            "documents": [],
+            "summary": "",
+        })
+
+    assert result["messages"][0].content == "Hello! How can I help you today?"
 
 
 def test_followup_context_action_reuses_existing_docs_for_more_detail():

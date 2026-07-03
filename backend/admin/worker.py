@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from backend.admin import files
 from backend.admin.events import event_hub
-from backend.admin.repository import new_id, now_iso, repo
+from backend.admin.repository import now_iso, repo
 from backend.admin.schemas import BatchStatus, DocumentStatus, JobStatus, PipelineStage, VariantStatus
 
 
@@ -480,7 +480,6 @@ class AdminWorker:
         if not review or not review.get("review_approved_md_path"):
             raise ValueError("Cannot chunk before review approval")
 
-        start = time.monotonic()
         repo.set_document_status(document["document_id"], DocumentStatus.CHUNK_RUNNING.value)
         repo.log(stage=PipelineStage.CHUNK.value, level="INFO", message="Chunking approved markdown", batch_id=document["batch_id"], document_id=document["document_id"], job_id=job_id)
         self._publish_document(document["document_id"])

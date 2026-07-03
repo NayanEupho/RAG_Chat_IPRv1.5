@@ -7,8 +7,6 @@ sys.path.append(os.getcwd())
 try:
     print("Checking imports...")
     from backend.saml.settings import get_saml_settings
-    from backend.saml.auth import init_saml_auth, prepare_flask_request
-    from backend.saml.routes import router
     from backend.state.history import init_history_db, get_connection
     
     print("✓ Imports Successful")

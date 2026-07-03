@@ -4,7 +4,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from backend.ingestion.processor import DocumentProcessor
-from backend.ingestion.chunkers.general import GeneralChunker, extract_markdown_tables, stable_doc_id
+from backend.ingestion.chunkers.general import GeneralChunker, stable_doc_id
 from backend.ingestion.chunkers.qna import QnAChunker
 from backend.ingestion.quality.gates import analyze_markdown, should_fallback
 

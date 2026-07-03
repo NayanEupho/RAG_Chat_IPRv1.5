@@ -23,8 +23,8 @@ load_dotenv()
 # Ensure project root is in path for imports to work correctly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from backend.startup import run_interactive_config
-from backend.config import get_config
+from backend.startup import run_interactive_config  # noqa: E402
+from backend.config import get_config  # noqa: E402
 
 def main():
     """

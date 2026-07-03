@@ -702,7 +702,7 @@ def bulk_delete_documents(payload: BulkDeleteRequest):
 
 @router.post("/documents/{document_id}/select-variant")
 def select_variant(document_id: str, payload: SelectVariantRequest):
-    document = repo.get_document(document_id)
+    repo.get_document(document_id)
     parse_variant = repo.get_parse_variant(payload.parse_variant_id)
     if parse_variant["document_id"] != document_id or parse_variant["status"] != VariantStatus.COMPLETE.value:
         raise HTTPException(status_code=400, detail="Parse variant is not complete")

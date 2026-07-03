@@ -1,5 +1,4 @@
 from docling.document_converter import DocumentConverter
-import os
 
 def test_simple(file_path):
     print(f"Testing simple docling for: {file_path}")

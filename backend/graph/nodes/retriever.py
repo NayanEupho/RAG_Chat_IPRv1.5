@@ -12,7 +12,8 @@ The retrieval engine orchestrates multi-stage search operations:
 from backend.graph.state import AgentState
 from backend.rag.store import get_vector_store
 from backend.llm.client import OllamaClientWrapper
-from functools import lru_cache
+from backend.llm.health import ModelUnavailableError, ensure_rag_ready
+from collections import defaultdict
 import hashlib
 import logging
 import asyncio
@@ -59,6 +60,8 @@ async def get_cached_embedding(query: str, model: str) -> list:
     try:
         response = await client.embed(model=model, input=query)
         embedding = response.get('embeddings', [])
+        if not embedding:
+            raise ModelUnavailableError("Embedding model returned no vector")
         
         if embedding:
             # Store in cache (limit cache size to prevent memory bloat)
@@ -73,10 +76,7 @@ async def get_cached_embedding(query: str, model: str) -> list:
         return embedding
     except Exception as e:
         logger.error(f"[RETRIEVER] Embedding failed for '{query}': {e}")
-        return []
-
-
-from collections import defaultdict
+        raise ModelUnavailableError(f"Embedding model failed during retrieval: {e}") from e
 
 def smart_merge(text_a: str, text_b: str, max_overlap: int = 500) -> str:
     """
@@ -97,7 +97,8 @@ def smart_merge(text_a: str, text_b: str, max_overlap: int = 500) -> str:
     
     # We look for the first 100 characters of the tail in the start of text_b
     search_str = a_tail[:100].strip()
-    if not search_str: return text_a + "\n" + text_b
+    if not search_str:
+        return text_a + "\n" + text_b
     
     start_pos = text_b.find(search_str)
     if start_pos != -1:
@@ -116,7 +117,8 @@ def stitch_fragments(docs: list[dict]) -> list[dict]:
     Fragment Reconstruction Engine (FRE) v2.
     Uses part counts (fragment_index/total) for deterministic stitching.
     """
-    if not docs: return []
+    if not docs:
+        return []
 
     # Table-aware ingestion already emits atomic row chunks. Merging adjacent
     # rows here can put an unrelated row at the front of the evidence envelope
@@ -144,8 +146,6 @@ def stitch_fragments(docs: list[dict]) -> list[dict]:
             combined_content = current['page_content']
             combined_meta = current['metadata'].copy()
             
-            # Metadata for FRE
-            f_idx = combined_meta.get('fragment_index', 0)
             f_total = combined_meta.get('total_fragments', 1)
             
             j = i + 1
@@ -513,6 +513,8 @@ async def retrieve_documents(state: AgentState):
                 "total_ms": 0,
             },
         }
+
+    await ensure_rag_ready()
 
     store = get_vector_store()
     available_files = store.get_all_files() if requested_targets else []

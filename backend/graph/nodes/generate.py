@@ -94,6 +94,20 @@ def is_detail_request(query: str) -> bool:
     ))
 
 
+def _simple_greeting_response(query: str) -> str | None:
+    """
+    Deterministic fast path for pure greetings.
+
+    This avoids spending a 35B generation call on "hi"/"hello" while keeping all
+    substantive chat and RAG requests on the normal model-backed path.
+    """
+    normalized = re.sub(r"[^a-z0-9\s]", " ", query.lower()).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if normalized in {"hi", "hello", "hey", "hii", "hiii", "good morning", "good afternoon", "good evening"}:
+        return "Hello! How can I help you today?"
+    return None
+
+
 def _compact_table_doc(doc: str, max_chars: int = 1400) -> str:
     """
     Keep table-row evidence compact for low TTFT.
@@ -210,6 +224,12 @@ async def generate_answer(state: AgentState):
     wants_detail = is_detail_request(latest_query)
 
     logger.info(f"[GENERATE] Intent: {intent}, Mode: {mode}, Docs count: {len(docs)}")
+
+    if intent == "chat" and not docs:
+        greeting_response = _simple_greeting_response(latest_query)
+        if greeting_response:
+            logger.info("[GENERATE] Fast-path response for simple greeting")
+            return {"messages": [AIMessage(content=greeting_response)], "summary": prev_summary}
 
     client = OllamaClientWrapper.get_chat_model()
     budgets = _get_budgets(intent)

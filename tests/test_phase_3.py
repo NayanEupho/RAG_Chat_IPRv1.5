@@ -2,13 +2,10 @@ import os
 import sys
 import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.graph.state import AgentState
 from backend.graph.nodes.router import route_query
-from backend.graph.nodes.generate import generate_answer
 from langchain_core.messages import HumanMessage
 
 @pytest.mark.asyncio

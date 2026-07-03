@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.ingestion.chunkers.vision import VisionChunker
 from backend.ingestion.processor import DocumentProcessor
-from backend.ingestion.vision_parser import VisionPage, clean_page_markdown, merge_page_markdown, remove_model_commentary, response_content
+from backend.ingestion.vision_parser import VisionPage, clean_page_markdown, merge_page_markdown, response_content
 from backend.ingestion.vision_prompts import prompt_for_doc_type
 
 

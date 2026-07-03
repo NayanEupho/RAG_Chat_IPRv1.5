@@ -92,7 +92,6 @@ async def saml_login(next: str = "/"):
         return RedirectResponse(url=next)
 
     try:
-        from saml2.client import Saml2Client
         from saml2 import BINDING_HTTP_REDIRECT
         
         client = get_saml_client()
@@ -308,7 +307,7 @@ async def saml_logout(request: Request, next: str = "/"):
         from .auth import create_logout_response
         return create_logout_response(redirect_url=logout_url)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Error during logout")
         return create_logout_response(redirect_url="/")
 

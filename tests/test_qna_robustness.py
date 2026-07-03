@@ -7,7 +7,6 @@ document artifacts like HTML entities and hyphenated Markdown lists.
 import sys
 import os
 import unittest
-import html
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

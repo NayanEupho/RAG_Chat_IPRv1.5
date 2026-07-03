@@ -1,14 +1,11 @@
 import os
 import sys
-import pytest
 import shutil
 import time
-from unittest.mock import MagicMock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.ingestion.processor import DocumentProcessor
-from backend.rag.store import get_vector_store, VectorStore
+from backend.rag.store import VectorStore
 
 TEST_DOC_DIR = "tests/test_docs"
 TEST_DB_DIR = "tests/test_chroma"

@@ -2,7 +2,6 @@ import asyncio
 import json
 import time
 import sys
-import os
 import re
 from pathlib import Path
 
@@ -116,12 +115,12 @@ class TTFTTest:
                                 try:
                                     token = json.loads(data)
                                     full_response += token
-                                except:
+                                except Exception:
                                     full_response += data
                             elif current_event == "end":
                                 try:
                                     end_metadata = json.loads(data)
-                                except:
+                                except Exception:
                                     end_metadata = {"raw": data}
                             elif current_event == "error":
                                 end_metadata["error"] = data
@@ -370,12 +369,12 @@ async def run_all_tests():
         )
 
     worst = sorted(all_ttfts, key=lambda x: x["ttft_ms"], reverse=True)[:5]
-    print(f"\n  Worst 5 TTFTs:")
+    print("\n  Worst 5 TTFTs:")
     for r in worst:
         print(f"    {r['ttft_ms']:>6}ms | {r['mode']:<8} | intent={r['intent']:<14} | \"{r['text']}\"")
 
     # Prefix caching analysis
-    print(f"\n  Prefix Caching:")
+    print("\n  Prefix Caching:")
     for label, tr in [("Non-Targeted RAG", t1), ("Targeted RAG", t2),
                        ("Targeted Paper Follow-up", t2b),
                        ("Chat", t3), ("Multi-Turn", t4), ("Follow-ups", t5),
@@ -390,13 +389,13 @@ async def run_all_tests():
     under_5 = sum(1 for t in all_ttfts if t["ttft_ms"] <= 5000)
     under_7 = sum(1 for t in all_ttfts if t["ttft_ms"] <= 7000)
     over_7 = sum(1 for t in all_ttfts if t["ttft_ms"] > 7000)
-    print(f"\n  Target: 5-7s worst case")
+    print("\n  Target: 5-7s worst case")
     print(f"    <=5s:  {under_5}/{len(all_ttfts)} ({under_5*100//len(all_ttfts)}%)")
     print(f"    <=7s:  {under_7}/{len(all_ttfts)} ({under_7*100//len(all_ttfts)}%)")
     print(f"    >7s:   {over_7}/{len(all_ttfts)} ({over_7*100//len(all_ttfts)}%)")
 
     if over_7 == 0:
-        print(f"  [OK] TARGET MET: All queries under 7s!")
+        print("  [OK] TARGET MET: All queries under 7s!")
     elif under_7 >= len(all_ttfts) * 0.8:
         print(f"  [OK] MOSTLY MET: {under_7*100//len(all_ttfts)}% under 7s")
     else:

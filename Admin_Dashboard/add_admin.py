@@ -9,8 +9,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.admin.auth import add_admin_user, list_admin_users, remove_admin_user
-from backend.admin.db import init_admin_db
+from backend.admin.auth import add_admin_user, list_admin_users, remove_admin_user  # noqa: E402
+from backend.admin.db import init_admin_db  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:

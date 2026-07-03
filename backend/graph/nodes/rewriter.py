@@ -8,7 +8,7 @@ breaks down multi-intent requests into targeted file searches.
 
 from backend.graph.state import AgentState
 from backend.llm.client import OllamaClientWrapper
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def rewrite_query(state: AgentState):
     # BYPASS LOGIC (Priority: High, Latency: Instant)
     # If there's no history AND only 0-1 targeted docs, we don't need the LLM to "rewrite" or "segment"
     if len(messages) < 3 and len(targeted_docs) <= 1:
-        logger.info(f"[REWRITER] Fast-Path Bypass: Single document/No-history context")
+        logger.info("[REWRITER] Fast-Path Bypass: Single document/No-history context")
         return {"semantic_queries": [{"query": query, "target": targeted_docs[0] if targeted_docs else None}]}
 
     logger.info(f"[REWRITER] Analyzing semantic mapping for: '{query}'")

@@ -6,7 +6,7 @@ import time
 import httpx
 import sys
 import glob
-from typing import List, Dict, Any, Optional
+from typing import Optional
 from dotenv import load_dotenv
 
 # Load environment variables from .env
@@ -82,10 +82,6 @@ async def get_system_config():
 async def process_and_store_file(file_path: str, store, processor, embed_client, model, dry_run=False, mode="auto", llm_normalize=False):
     """Robust 'from scratch' processing for a single file."""
     filename = os.path.basename(file_path)
-    
-    # 1. Detect doc_type based on path
-    normalized_path = file_path.replace('\\', '/')
-    is_qna = '/QnA/' in normalized_path or '\\QnA\\' in file_path
     
     # 2. Parsing & Chunking (High-Fidelity)
     # The DocumentProcessor now handles:
@@ -178,7 +174,7 @@ async def cmd_rebuild(args):
             all_files.append(os.path.join(root, file))
 
     if not all_files:
-        print(f"   ℹ️  No files found in 'upload_docs'.")
+        print("   ℹ️  No files found in 'upload_docs'.")
         return
 
     print(f"[INFO] Found {len(all_files)} documents. Starting re-indexing...")
@@ -207,7 +203,7 @@ async def cmd_rebuild(args):
             logger.error(f"Error processing {fname}: {e}")
 
     duration = round(time.time() - start_time, 2)
-    print(f"\n[DONE] REBUILD COMPLETE!")
+    print("\n[DONE] REBUILD COMPLETE!")
     print(f"   Time Taken:  {duration}s")
     print(f"   Total Chunks: {total_chunks}")
     print(f"   Final Count:  {store.count()} in DB")

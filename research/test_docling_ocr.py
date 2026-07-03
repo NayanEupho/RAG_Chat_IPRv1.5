@@ -2,7 +2,6 @@ from docling.document_converter import DocumentConverter
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import PdfFormatOption
 from docling.datamodel.base_models import InputFormat
-import os
 
 def test_ocr(file_path):
     print(f"Testing OCR-only docling for: {file_path}")

@@ -7,7 +7,6 @@ Implements a thread-safe singleton pattern for centralized database access.
 
 import chromadb
 from chromadb.config import Settings
-import os
 import threading
 import time
 from typing import List, Dict, Any, Optional

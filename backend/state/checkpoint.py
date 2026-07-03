@@ -8,7 +8,6 @@ in a local SQLite database.
 
 from langgraph.checkpoint.memory import MemorySaver
 import sqlite3
-import os
 
 # Physical DB used for session metadata, not the actual checkpoints
 DB_PATH = "rag_chat_sessions.db"

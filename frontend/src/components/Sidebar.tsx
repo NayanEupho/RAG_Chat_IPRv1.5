@@ -18,10 +18,14 @@ interface Session {
 
 interface SystemStatus {
     status: string;
+    chat_available?: boolean;
+    rag_available?: boolean;
     main_model_healthy: boolean;
     main_model_name: string;
+    main_model_error?: string | null;
     embed_model_healthy: boolean;
     embed_model_name: string;
+    embed_model_error?: string | null;
 }
 
 export default function Sidebar({
@@ -75,9 +79,11 @@ export default function Sidebar({
             const res = await fetch(`${getApiBase()}/status`, { credentials: 'include' });
             if (res.ok) {
                 const data = await res.json();
-                setMainModelHealthy(data.main_model_healthy === true);
+                const chatReady = data.chat_available ?? data.main_model_healthy === true;
+                const ragReady = data.rag_available ?? (data.main_model_healthy === true && data.embed_model_healthy === true);
+                setMainModelHealthy(chatReady);
                 setEmbedModelHealthy(data.embed_model_healthy === true);
-                setSystemHealth(data.status === 'ok');
+                setSystemHealth(ragReady);
                 setConfig(data); // Store full status as config for names
             } else {
                 setMainModelHealthy(false);
@@ -186,6 +192,13 @@ export default function Sidebar({
     if (!mounted) return null;
 
     const toggleSidebar = () => setIsOpen(!isOpen);
+    const chatAvailable = config?.chat_available ?? mainModelHealthy;
+    const ragAvailable = config?.rag_available ?? systemHealth;
+    const systemStatusLabel = ragAvailable
+        ? 'System Operational'
+        : chatAvailable
+            ? 'Chat Ready / RAG Offline'
+            : 'System Offline';
 
     const formatDate = (dateStr: string) => {
         try {
@@ -304,7 +317,7 @@ export default function Sidebar({
                             boxShadow: systemHealth ? '0 0 5px var(--accent-primary)' : 'none',
                             transition: 'background-color 0.3s'
                         }}></div>
-                        <span>{systemHealth ? 'System Operational' : 'System Offline'}</span>
+                        <span title={config?.embed_model_error || config?.main_model_error || undefined}>{systemStatusLabel}</span>
                     </div>
                 </div>
             </div>
