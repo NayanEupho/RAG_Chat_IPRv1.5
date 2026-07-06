@@ -3,6 +3,13 @@ import secrets
 from functools import lru_cache
 
 
+def _clean_env_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip().strip('"').strip("'")
+    return cleaned or None
+
+
 class SAMLSettings:
     """
     Holds every env-driven value the SAML package needs:
@@ -65,6 +72,14 @@ class SAMLSettings:
         self.session_cookie_name: str = os.getenv(
             "SESSION_COOKIE_NAME", "saml_session"
         )
+        self.xmlsec_binary = _clean_env_value(os.getenv("XMLSEC_BINARY"))
+        self.xmlsec_path = _clean_env_value(os.getenv("XMLSEC_PATH"))
+
+        if self.xmlsec_binary and not os.path.isfile(self.xmlsec_binary):
+            raise RuntimeError(
+                "XMLSEC_BINARY is set but the file does not exist: "
+                f"{self.xmlsec_binary}. Install xmlsec or correct the path."
+            )
 
     # ------------------------------------------------------------------
     # IdP certificate helpers
@@ -118,7 +133,7 @@ class SAMLSettings:
     # pysaml2 config
     # ------------------------------------------------------------------
     def pysaml2_config(self) -> dict:
-        return {
+        config = {
             "entityid": self.sp_entity_id,
             "service": {
                 "sp": {
@@ -147,6 +162,11 @@ class SAMLSettings:
             },
             "attribute_map_dir": None,
         }
+        if self.xmlsec_binary:
+            config["xmlsec_binary"] = self.xmlsec_binary
+        if self.xmlsec_path:
+            config["xmlsec_path"] = [self.xmlsec_path]
+        return config
 
     # ------------------------------------------------------------------
     # pysaml2 client
