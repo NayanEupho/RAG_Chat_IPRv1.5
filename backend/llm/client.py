@@ -9,6 +9,7 @@ import ollama
 import asyncio
 import weakref
 import logging
+import os
 from langchain_ollama import ChatOllama
 from backend.config import get_config
 from typing import Dict
@@ -102,3 +103,11 @@ class OllamaClientWrapper:
     def get_embedding_model_name() -> str:
         config = get_config()
         return config.embedding_model.model_name if config.embedding_model else ""
+
+    @staticmethod
+    def get_embedding_keep_alive() -> float | str:
+        raw_value = os.getenv("RAG_EMBED_KEEP_ALIVE", "-1").strip()
+        try:
+            return float(raw_value)
+        except ValueError:
+            return raw_value

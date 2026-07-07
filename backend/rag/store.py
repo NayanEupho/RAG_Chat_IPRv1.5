@@ -25,6 +25,7 @@ class VectorStore:
         self.lock = threading.Lock()
         self._files_cache = None
         self._files_cache_at = 0.0
+        self._collection_refreshed_at = 0.0
         
         # Initialize ChromaDB Client
         self.client = chromadb.PersistentClient(
@@ -37,15 +38,21 @@ class VectorStore:
             name="rag_documents",
             metadata={"hnsw:space": "cosine"} # Cosine similarity
         )
+        self._collection_refreshed_at = time.monotonic()
         logger.info(f"Vector Store initialized at {persist_dir}")
 
-    def refresh_collection(self):
+    def refresh_collection(self, force: bool = True):
         """Reconnect to the persisted collection after an external rebuild."""
+        if not force and (time.monotonic() - self._collection_refreshed_at) < 30.0:
+            return
         with self.lock:
+            if not force and (time.monotonic() - self._collection_refreshed_at) < 30.0:
+                return
             self.collection = self.client.get_or_create_collection(
                 name="rag_documents",
                 metadata={"hnsw:space": "cosine"}
             )
+            self._collection_refreshed_at = time.monotonic()
 
     def add_documents(self, texts: List[str], metadatas: List[Dict[str, Any]], ids: List[str], embeddings: List[List[float]]):
         """Adds processed chunks with embeddings to the store. Lock protects writes."""
@@ -68,7 +75,7 @@ class VectorStore:
         Note: ChromaDB reads are thread-safe, so no lock needed for concurrent queries.
         This removes the read-side bottleneck that was serializing all operations.
         """
-        self.refresh_collection()
+        self.refresh_collection(force=False)
         return self.collection.query(
             query_embeddings=query_embeddings,
             n_results=n_results,
@@ -80,7 +87,7 @@ class VectorStore:
         Retrieves documents directly by metadata (filtering without embedding).
         Note: ChromaDB reads are thread-safe, so no lock needed.
         """
-        self.refresh_collection()
+        self.refresh_collection(force=False)
         return self.collection.get(
             where=where,
             limit=limit,
@@ -88,7 +95,7 @@ class VectorStore:
         )
 
     def count(self) -> int:
-        self.refresh_collection()
+        self.refresh_collection(force=False)
         with self.lock:
             return self.collection.count()
 
@@ -98,7 +105,7 @@ class VectorStore:
             if self._files_cache is not None and (time.monotonic() - self._files_cache_at) < 5.0:
                 return list(self._files_cache)
 
-            self.refresh_collection()
+            self.refresh_collection(force=False)
             filenames = set()
             offset = 0
             limit = 500

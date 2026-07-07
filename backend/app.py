@@ -99,8 +99,9 @@ async def lifespan(app: FastAPI):
     watchdog_service.start()
 
     try:
-        from backend.llm.warmup import run_warmup
+        from backend.llm.warmup import run_embedding_keepalive_loop, run_warmup
         app.state.model_warmup_task = asyncio.create_task(run_warmup(mode="all", source="startup"))
+        app.state.embedding_keepalive_task = asyncio.create_task(run_embedding_keepalive_loop())
     except Exception as e:
         logger.warning(f"Startup warmup scheduling failed: {e}")
     
@@ -114,6 +115,10 @@ async def lifespan(app: FastAPI):
         admin_worker.stop()
     except Exception as e:
         logger.warning(f"Admin dashboard worker shutdown failed: {e}")
+    for task_name in ("model_warmup_task", "embedding_keepalive_task"):
+        task = getattr(app.state, task_name, None)
+        if task and not task.done():
+            task.cancel()
 
 app = FastAPI(title="RAG Chat IPR", lifespan=lifespan)
 

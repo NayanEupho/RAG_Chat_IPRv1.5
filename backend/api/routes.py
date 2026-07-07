@@ -125,15 +125,6 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             import time
             ttft_start = time.monotonic()
 
-            requires_rag = request_body.mode.lower() == "rag" or "@" in request_body.message
-            if requires_rag:
-                from backend.llm.health import ModelUnavailableError, ensure_rag_ready
-                try:
-                    await ensure_rag_ready()
-                except ModelUnavailableError as e:
-                    yield f"event: error\ndata: {str(e)}\n\n"
-                    return
-            
             async for event in get_graph().astream_events(inputs, config=config, version="v1"):
                 # CHECK FOR DISCONNECTION
                 if await request.is_disconnected():
@@ -255,6 +246,9 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
                 "generator_first_token_ms": generator_first_token_ms,
                 "nodes": node_timings,
             }
+            retriever_end_ms = node_timings.get("retriever", {}).get("end_ms")
+            if isinstance(generator_start_ms, int) and isinstance(retriever_end_ms, int):
+                timings["post_retrieval_to_generator_ms"] = max(0, generator_start_ms - retriever_end_ms)
             metadata = json.dumps({
                 "intent": final_intent, 
                 "sources": deduped_docs,

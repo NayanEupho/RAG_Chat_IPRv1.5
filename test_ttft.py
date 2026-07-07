@@ -3,6 +3,7 @@ import json
 import time
 import sys
 import re
+import os
 from pathlib import Path
 
 try:
@@ -10,7 +11,8 @@ try:
 except Exception:
     pass
 
-API_BASE = "http://localhost:8000"
+API_BASE = os.getenv("TTFT_API_BASE", "http://localhost:8000")
+STATUS_TIMEOUT_SECONDS = float(os.getenv("TTFT_STATUS_TIMEOUT_SECONDS", "10"))
 
 
 def compact(text, limit=900):
@@ -176,6 +178,8 @@ class TTFTTest:
             print(
                 "    Retrieval: "
                 f"total={retrieval_metrics.get('total_ms', '?')}ms "
+                f"ready={retrieval_metrics.get('readiness_ms', '?')}ms "
+                f"search={retrieval_metrics.get('search_ms', '?')}ms "
                 f"emb={retrieval_metrics.get('embedding_ms', '?')}ms "
                 f"vec={retrieval_metrics.get('vector_ms', '?')}ms "
                 f"candidates={retrieval_metrics.get('candidate_count', '?')} "
@@ -213,7 +217,7 @@ async def run_all_tests():
     # Check server health
     try:
         async with httpx.AsyncClient() as c:
-            r = await c.get(f"{API_BASE}/api/status", timeout=5)
+            r = await c.get(f"{API_BASE}/api/status", timeout=STATUS_TIMEOUT_SECONDS)
         status_payload = r.json()
         print(f"\n  Server: {status_payload.get('status', '?')} | Python: {status_payload.get('python_version', '?')}")
         if str(status_payload.get("python_version", "")).startswith("3.14"):

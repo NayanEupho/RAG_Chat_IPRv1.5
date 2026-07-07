@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any
 
-from backend.llm.health import get_model_health
+from backend.llm.health import schedule_model_health_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,11 @@ async def _warm_embedding_model(cancel_token: int) -> str:
     if not cfg.embedding_model:
         return "not_configured"
     client = OllamaClientWrapper.get_embedding_client()
-    response = await client.embed(model=cfg.embedding_model.model_name, input="warmup")
+    response = await client.embed(
+        model=cfg.embedding_model.model_name,
+        input="warmup",
+        keep_alive=OllamaClientWrapper.get_embedding_keep_alive(),
+    )
     embeddings = response.get("embeddings", []) if isinstance(response, dict) else getattr(response, "embeddings", [])
     return "ready" if embeddings else "empty"
 
@@ -133,11 +138,8 @@ async def run_warmup(mode: str = "all", filename: str | None = None, source: str
 
             if normalized_mode in {"all", "rag", "doc"} and not _was_cancelled(cancel_token):
                 result["rag"] = await _warm_embedding_model(cancel_token)
-                health = await get_model_health(force=True)
-                if result["rag"] == "ready" and not health.get("rag_available"):
-                    result["rag"] = "unavailable"
-                if health.get("embed_model_error"):
-                    result["embedding_error"] = health.get("embed_model_error")
+                if result["rag"] == "ready":
+                    result["health_refresh_scheduled"] = schedule_model_health_refresh()
 
             if normalized_mode in {"all", "doc"} and not _was_cancelled(cancel_token):
                 result["vector"] = await _warm_vector_store(filename, cancel_token)
@@ -154,3 +156,29 @@ async def run_warmup(mode: str = "all", filename: str | None = None, source: str
             result["status"] = "skipped"
             result["reason"] = "real_request_started"
         return result
+
+
+def _embedding_keepalive_interval_seconds() -> float:
+    try:
+        return max(15.0, float(os.getenv("RAG_EMBED_KEEPALIVE_INTERVAL_SECONDS", "120")))
+    except ValueError:
+        return 120.0
+
+
+async def run_embedding_keepalive_loop() -> None:
+    """Keep the embedding model resident without competing with live requests."""
+    interval = _embedding_keepalive_interval_seconds()
+    while True:
+        await asyncio.sleep(interval)
+        if real_request_active() or _warmup_lock.locked():
+            continue
+        async with _warmup_lock:
+            if real_request_active():
+                continue
+            cancel_token = _cancel_token()
+            try:
+                await _warm_embedding_model(cancel_token)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("[WARMUP] Embedding keepalive skipped: %s", exc)

@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 
 # Global LRU-style cache for embeddings to reduce Ollama API load
 _embedding_cache = {}
+_embedding_inflight: dict[str, asyncio.Task] = {}
+_embedding_inflight_lock = asyncio.Lock()
+
+
+def _embedding_cache_key(query: str, model: str) -> str:
+    return hashlib.md5(f"{query}:{model}".encode()).hexdigest()
 
 def _normalize_filename(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
@@ -50,33 +56,89 @@ def _resolve_target_filename(target: str, available_files: list[str]) -> str:
 
 async def get_cached_embedding(query: str, model: str) -> list:
     """Get embedding from cache or compute it."""
-    cache_key = hashlib.md5(f"{query}:{model}".encode()).hexdigest()
-    
-    if cache_key in _embedding_cache:
-        logger.debug(f"Embedding cache HIT for query: {query[:30]}...")
-        return _embedding_cache[cache_key]
-    
+    normalized = re.sub(r"\s+", " ", query or "").strip()
+    embeddings = await get_cached_embeddings([normalized], model)
+    return embeddings.get(normalized, [])
+
+
+async def get_cached_embeddings(queries: list[str], model: str) -> dict[str, list]:
+    """Get embeddings for multiple queries with one Ollama call for cache misses."""
+    unique_queries = []
+    seen_queries = set()
+    for query in queries:
+        normalized = re.sub(r"\s+", " ", query or "").strip()
+        if normalized and normalized not in seen_queries:
+            unique_queries.append(normalized)
+            seen_queries.add(normalized)
+
+    results: dict[str, list] = {}
+    tasks_to_await: list[asyncio.Task] = []
+    queries_to_fetch: list[str] = []
+    async with _embedding_inflight_lock:
+        for query in unique_queries:
+            cache_key = _embedding_cache_key(query, model)
+            if cache_key in _embedding_cache:
+                logger.debug(f"Embedding cache HIT for query: {query[:30]}...")
+                results[query] = _embedding_cache[cache_key]
+            elif cache_key in _embedding_inflight:
+                tasks_to_await.append(_embedding_inflight[cache_key])
+            else:
+                queries_to_fetch.append(query)
+
+        if queries_to_fetch:
+            fetch_task = asyncio.create_task(_fetch_and_cache_embeddings(queries_to_fetch, model))
+            for query in queries_to_fetch:
+                _embedding_inflight[_embedding_cache_key(query, model)] = fetch_task
+            tasks_to_await.append(fetch_task)
+
+    for task in tasks_to_await:
+        results.update(await task)
+
+    return {query: results[query] for query in unique_queries if query in results}
+
+
+async def _fetch_and_cache_embeddings(missing_queries: list[str], model: str) -> dict[str, list]:
     client = OllamaClientWrapper.get_embedding_client()
+    results: dict[str, list] = {}
     try:
-        response = await client.embed(model=model, input=query)
-        embedding = response.get('embeddings', [])
-        if not embedding:
+        input_value = missing_queries[0] if len(missing_queries) == 1 else missing_queries
+        response = await client.embed(
+            model=model,
+            input=input_value,
+            keep_alive=OllamaClientWrapper.get_embedding_keep_alive(),
+        )
+        embeddings = response.get('embeddings', [])
+        if not embeddings:
             raise ModelUnavailableError("Embedding model returned no vector")
-        
-        if embedding:
-            # Store in cache (limit cache size to prevent memory bloat)
+
+        if len(missing_queries) == 1 and embeddings and isinstance(embeddings[0], (int, float)):
+            embeddings = [embeddings]
+        if len(embeddings) != len(missing_queries):
+            raise ModelUnavailableError("Embedding model returned an unexpected vector count")
+
+        for query, embedding in zip(missing_queries, embeddings):
+            if not embedding:
+                raise ModelUnavailableError("Embedding model returned no vector")
+            cached_embedding = embedding if isinstance(embedding[0], list) else [embedding]
             if len(_embedding_cache) > 1000:
-                # Simple eviction: clear half the cache
                 keys_to_remove = list(_embedding_cache.keys())[:500]
-                for k in keys_to_remove:
-                    del _embedding_cache[k]
-            _embedding_cache[cache_key] = embedding
+                for key in keys_to_remove:
+                    del _embedding_cache[key]
+            _embedding_cache[_embedding_cache_key(query, model)] = cached_embedding
+            results[query] = cached_embedding
             logger.debug(f"Embedding cache MISS, cached for query: {query[:30]}...")
-        
-        return embedding
+
+        return results
     except Exception as e:
-        logger.error(f"[RETRIEVER] Embedding failed for '{query}': {e}")
+        logger.error(f"[RETRIEVER] Embedding failed for {len(missing_queries)} queries: {e}")
         raise ModelUnavailableError(f"Embedding model failed during retrieval: {e}") from e
+    finally:
+        async with _embedding_inflight_lock:
+            for query in missing_queries:
+                cache_key = _embedding_cache_key(query, model)
+                task = _embedding_inflight.get(cache_key)
+                if task is asyncio.current_task():
+                    del _embedding_inflight[cache_key]
 
 def smart_merge(text_a: str, text_b: str, max_overlap: int = 500) -> str:
     """
@@ -514,7 +576,9 @@ async def retrieve_documents(state: AgentState):
             },
         }
 
+    readiness_start = time.monotonic()
     await ensure_rag_ready()
+    readiness_ms = int((time.monotonic() - readiness_start) * 1000)
 
     store = get_vector_store()
     available_files = store.get_all_files() if requested_targets else []
@@ -533,19 +597,36 @@ async def retrieve_documents(state: AgentState):
         "targeted_docs_requested": requested_targets,
         "targeted_docs_resolved": targeted_docs,
         "query_plan_count": len(query_plan),
+        "readiness_ms": readiness_ms,
         "embedding_ms": 0,
         "vector_ms": 0,
+        "search_ms": 0,
         "fallback_used": False,
         "candidate_count": 0,
         "ranked_count": 0,
         "adjacent_context_count": 0,
         "reason": None,
     }
-    embedding_durations = []
     vector_durations = []
 
     per_query = min(12 if has_targets else 18, max(top_k * (2 if has_targets else 3), top_k + 4))
     pool_limit = min(36 if has_targets else 56, per_query * max(1, len(query_plan)))
+    embeddings_by_query: dict[str, list] = {}
+    queries_to_embed = []
+    for plan in query_plan:
+        q = re.sub(r"\s+", " ", (plan.get("query") or query)).strip()
+        if q == query and state.get("query_embedding"):
+            embeddings_by_query[q] = state["query_embedding"]
+        elif q:
+            queries_to_embed.append(q)
+
+    if queries_to_embed:
+        emb_start = time.monotonic()
+        embeddings_by_query.update(await get_cached_embeddings(queries_to_embed, model))
+        metrics["embedding_ms"] = int((time.monotonic() - emb_start) * 1000)
+        metrics["embedding_total_ms"] = metrics["embedding_ms"]
+
+    search_start = time.monotonic()
 
     async def fetch_intro(doc_name: str):
         if not any(term in query.lower() for term in ["about", "overview", "purpose", "scope", "summarize", "summary", "author", "authors", "affiliation", "title", "abstract"]):
@@ -591,13 +672,9 @@ async def retrieve_documents(state: AgentState):
         return docs
 
     async def run_vector_query(plan: dict):
-        q = plan.get("query") or query
+        q = re.sub(r"\s+", " ", (plan.get("query") or query)).strip()
         target_file = plan.get("target")
-        q_embed = state.get("query_embedding") if q == query else None
-        if not q_embed:
-            emb_start = time.monotonic()
-            q_embed = await get_cached_embedding(q, model)
-            embedding_durations.append(int((time.monotonic() - emb_start) * 1000))
+        q_embed = embeddings_by_query.get(q)
         if not q_embed:
             return []
         filters = {"filename": target_file} if target_file else None
@@ -682,8 +759,6 @@ async def retrieve_documents(state: AgentState):
         tasks.extend(fetch_intro(doc) for doc in targeted_docs)
 
     batches = await asyncio.gather(*tasks)
-    metrics["embedding_ms"] = max(embedding_durations) if embedding_durations else 0
-    metrics["embedding_total_ms"] = sum(embedding_durations)
     metrics["vector_ms"] = max(vector_durations) if vector_durations else 0
     metrics["vector_total_ms"] = sum(vector_durations)
     candidates = _dedupe_docs([doc for batch in batches for doc in batch])
@@ -712,7 +787,8 @@ async def retrieve_documents(state: AgentState):
     metrics["candidate_count"] = len(candidates)
     candidates = candidates[:pool_limit]
 
-    search_ms = int((time.monotonic() - retrieval_start) * 1000)
+    search_ms = int((time.monotonic() - search_start) * 1000)
+    metrics["search_ms"] = search_ms
     logger.info(f"[RETRIEVER] Hybrid search produced {len(candidates)} candidates in {search_ms}ms.")
 
     if os.getenv("RAG_USE_RERANKER", "false").lower() == "true" and candidates:

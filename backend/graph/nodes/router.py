@@ -219,7 +219,11 @@ async def route_query(state: AgentState):
         embed_client = OllamaClientWrapper.get_embedding_client()
         embed_model = OllamaClientWrapper.get_embedding_model_name()
         
-        resp = await embed_client.embed(model=embed_model, input=[original_query])
+        resp = await embed_client.embed(
+            model=embed_model,
+            input=[original_query],
+            keep_alive=OllamaClientWrapper.get_embedding_keep_alive(),
+        )
         emb = resp.get('embeddings', [[]])[0]
         
         results = store.collection.query(query_embeddings=[emb], n_results=1)
