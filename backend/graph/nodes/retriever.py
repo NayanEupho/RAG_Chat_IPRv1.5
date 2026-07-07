@@ -520,16 +520,9 @@ def _target_lexical_score(query: str, doc: dict) -> float:
         elif phrase in body_text:
             score += 0.7
 
-    high_signal_terms = {
-        "eligibility", "eligible", "criteria", "requirement", "requirements",
-        "service", "services", "officer", "officers", "casual", "earned",
-        "commuted", "paternity", "study", "agentic", "concept", "concepts",
-        "hub", "spoke", "mcp", "protocol", "brain", "chef", "cognitive",
-        "load", "friction", "context", "switching", "syntax", "recall",
-        "catastrophic", "risk", "silos", "semantic", "middleware",
-    }
+    # Boost content-bearing query terms without encoding domain- or document-specific vocabulary.
     for token in q_tokens:
-        if token in high_signal_terms and has_token(token, haystack):
+        if len(token) >= 5 and has_token(token, haystack):
             score += 0.55
 
     query_acronyms = {

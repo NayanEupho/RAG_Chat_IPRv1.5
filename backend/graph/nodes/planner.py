@@ -209,11 +209,11 @@ def _build_semantic_queries(query: str, targets: list[str] | None = None, max_va
 
     lower = base_query.lower()
     if any(term in lower for term in ["eligibility", "criteria", "eligible", "who can"]):
-        variants.append(f"{keyword_query or base_query} eligible services officers service requirements criteria")
+        variants.append(f"{keyword_query or base_query} eligibility criteria requirements qualifications")
     elif any(term in lower for term in ["agentic", "concept", "concepts", "architecture philosophy"]):
-        variants.append(f"{keyword_query or base_query} tools not rules hub spoke model mcp model context protocol brain chef")
+        variants.append(f"{keyword_query or base_query} concepts principles architecture approach mechanisms")
     elif any(term in lower for term in ["feature", "features", "problem", "problems", "solve", "solves"]):
-        variants.append(f"{keyword_query or base_query} cognitive load friction context switching syntax recall catastrophic risk tool silos semantic middleware")
+        variants.append(f"{keyword_query or base_query} features capabilities problems challenges solutions benefits")
     elif any(term in lower for term in ["summary", "summarize", "overview", "about"]):
         variants.append(f"{keyword_query or base_query} overview purpose scope summary")
     elif any(term in lower for term in ["benefit", "allowance", "entitlement"]):

@@ -310,7 +310,7 @@ def test_feature_problem_followup_does_not_repeat_previous_question():
     assert rewritten == "what feature and problems does it solve ?"
 
 
-def test_technical_report_followup_queries_expand_for_concepts_and_problems():
+def test_followup_query_expansion_uses_generic_categories_not_local_facts():
     concept_plan = _build_semantic_queries(
         "what core agentic concepts does it rely on",
         ["TECHNICAL_REPORT_V8.pdf"],
@@ -320,8 +320,17 @@ def test_technical_report_followup_queries_expand_for_concepts_and_problems():
         ["TECHNICAL_REPORT_V8.pdf"],
     )
 
-    assert any("hub spoke" in item["query"] and "mcp" in item["query"] for item in concept_plan)
-    assert any("cognitive load" in item["query"] and "context switching" in item["query"] for item in problem_plan)
+    concept_queries = " ".join(item["query"].lower() for item in concept_plan)
+    problem_queries = " ".join(item["query"].lower() for item in problem_plan)
+
+    assert "principles" in concept_queries
+    assert "architecture" in concept_queries
+    assert "capabilities" in problem_queries
+    assert "challenges" in problem_queries
+    assert "hub spoke" not in concept_queries
+    assert "mcp" not in concept_queries
+    assert "cognitive load" not in problem_queries
+    assert "context switching" not in problem_queries
 
 
 def test_persisted_target_context_does_not_capture_unrelated_short_query():
