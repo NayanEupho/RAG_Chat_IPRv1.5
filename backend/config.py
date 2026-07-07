@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional
 import os
 import logging
+import threading
 from dotenv import load_dotenv
 
 # Initialize logger
@@ -102,10 +103,17 @@ class AppConfig(BaseModel):
         return self.ingest_force_cpu
 # Singleton instance
 _runtime_config = AppConfig()
+_dotenv_loaded = False
+_dotenv_lock = threading.Lock()
 
 def get_config() -> AppConfig:
     # Load .env file if present (supports uvicorn workers that may not inherit shell env vars)
-    load_dotenv()
+    global _dotenv_loaded
+    if not _dotenv_loaded:
+        with _dotenv_lock:
+            if not _dotenv_loaded:
+                load_dotenv()
+                _dotenv_loaded = True
     # If not configured in memory, check env vars (in case of uvicorn worker)
     if not _runtime_config.is_configured:
         main_host = os.getenv("RAG_MAIN_HOST")

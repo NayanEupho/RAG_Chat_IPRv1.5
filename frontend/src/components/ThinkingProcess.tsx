@@ -26,6 +26,7 @@ interface ThinkingProcessProps {
 export default function ThinkingProcess({ thoughts, isFinished = false, ttft, hasStartedAnswer = false }: ThinkingProcessProps) {
     const [isExpanded, setIsExpanded] = useState(!isFinished);
     const [elapsed, setElapsed] = useState(0);
+    const sequenceKey = thoughts.map(t => `${t.type}:${t.content}`).join("|");
 
     useEffect(() => {
         if (isFinished || hasStartedAnswer) {
@@ -34,6 +35,10 @@ export default function ThinkingProcess({ thoughts, isFinished = false, ttft, ha
             setIsExpanded(true);
         }
     }, [isFinished, hasStartedAnswer]);
+
+    useEffect(() => {
+        setElapsed(0);
+    }, [sequenceKey]);
 
     useEffect(() => {
         if (isFinished || hasStartedAnswer) return;

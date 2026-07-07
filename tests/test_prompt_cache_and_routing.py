@@ -27,6 +27,8 @@ from backend.graph.nodes.planner import (
     _is_general_chat_query,
     _is_rag_followup,
     _query_indexed_acronyms,
+    _should_reuse_target_context,
+    _target_correction_query,
     planner_node,
 )
 
@@ -285,6 +287,47 @@ def test_persisted_target_context_does_not_capture_unrelated_short_query():
     }
 
     assert not _is_rag_followup("what is mars", rag_state)
+
+
+def test_gotcha_followup_stays_in_recent_target_context():
+    rag_state = {
+        "last_targeted_docs": ["LeaveAtaGlance.pdf"],
+        "messages": [
+            HumanMessage(content="What does @LeaveAtaGlance.pdf tell in brief?"),
+            AIMessage(content="It summarizes leave rules."),
+            HumanMessage(content="some other gotcha or catches that we need to keep in mind"),
+        ],
+    }
+
+    assert _is_rag_followup("some other gotcha or catches that we need to keep in mind", rag_state)
+    assert _should_reuse_target_context("some other gotcha or catches that we need to keep in mind", rag_state)
+
+
+def test_new_subject_does_not_reuse_previous_target_context():
+    rag_state = {
+        "last_targeted_docs": ["LeaveAtaGlance.pdf"],
+        "messages": [
+            HumanMessage(content="What does @LeaveAtaGlance.pdf tell in brief?"),
+            AIMessage(content="It summarizes leave rules."),
+            HumanMessage(content="explain transformer attention architecture"),
+        ],
+    }
+
+    assert not _should_reuse_target_context("explain transformer attention architecture", rag_state)
+
+
+def test_target_correction_reuses_previous_substantive_question_with_new_target():
+    rag_state = {
+        "messages": [
+            HumanMessage(content="some other gotcha or catches that we need to keep in mind"),
+            AIMessage(content="Transformer attention gotchas."),
+            HumanMessage(content="I meant in LeaveAtaGlance.pdf"),
+        ],
+    }
+
+    rewritten = _target_correction_query("I meant in LeaveAtaGlance.pdf", ["LeaveAtaGlance.pdf"], rag_state)
+
+    assert rewritten == "some other gotcha or catches that we need to keep in mind"
 
 
 def test_summarize_everything_stays_in_rag_context():

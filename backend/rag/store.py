@@ -96,13 +96,12 @@ class VectorStore:
 
     def count(self) -> int:
         self.refresh_collection(force=False)
-        with self.lock:
-            return self.collection.count()
+        return self.collection.count()
 
     def get_all_files(self) -> List[str]:
         """Returns unique filenames currently indexed (Scalable Pagination)."""
         try:
-            if self._files_cache is not None and (time.monotonic() - self._files_cache_at) < 5.0:
+            if self._files_cache is not None and (time.monotonic() - self._files_cache_at) < 30.0:
                 return list(self._files_cache)
 
             self.refresh_collection(force=False)
@@ -188,9 +187,12 @@ class VectorStore:
 
 # Singleton
 _store = None
+_store_lock = threading.Lock()
 
 def get_vector_store() -> VectorStore:
     global _store
     if _store is None:
-        _store = VectorStore()
+        with _store_lock:
+            if _store is None:
+                _store = VectorStore()
     return _store

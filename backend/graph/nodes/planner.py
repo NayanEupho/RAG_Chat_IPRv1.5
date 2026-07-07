@@ -27,8 +27,24 @@ _QUERY_STOPWORDS = {
     "which", "who", "why", "with"
 }
 
+_DOC_DETAIL_TERMS = {
+    "author", "authors", "affiliation", "affiliations", "title", "abstract",
+    "summary", "summarize", "summarise", "overview", "details", "more",
+    "eligibility", "eligible", "criteria", "benefit", "benefits", "limitation",
+    "limitations", "conclusion", "conclusions", "methodology", "results",
+    "future", "work", "gotcha", "gotchas", "catch", "catches", "caveat",
+    "caveats", "important", "points", "keep", "mind",
+}
 
-def _extract_mentions(query: str) -> list[str]:
+_LOW_INFORMATION_FOLLOWUP_RE = re.compile(
+    r"\b(tell me more|more details|explain more|elaborate|expand|"
+    r"what about|summari[sz]e everything|summary|key points|important points|"
+    r"gotchas?|catches|caveats?)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_mentions(query: str, filenames: list[str] | None = None) -> list[str]:
     """
     Resolve @mentions against indexed filenames first.
 
@@ -39,8 +55,10 @@ def _extract_mentions(query: str) -> list[str]:
     mentions = []
     query_lower = query.lower()
     try:
-        from backend.rag.store import get_vector_store
-        for filename in sorted(get_vector_store().get_all_files(), key=len, reverse=True):
+        if filenames is None:
+            from backend.rag.store import get_vector_store
+            filenames = get_vector_store().get_all_files()
+        for filename in sorted(filenames, key=len, reverse=True):
             if f"@{filename.lower()}" in query_lower:
                 mentions.append(filename)
     except Exception as e:
@@ -53,13 +71,14 @@ def _extract_mentions(query: str) -> list[str]:
     return [m.strip().rstrip(".,") for m in fallback if m.strip() and ('.' in m or len(m) > 3)]
 
 
-def _extract_named_doc_references(query: str) -> list[str]:
+def _extract_named_doc_references(query: str, filenames: list[str] | None = None) -> list[str]:
     """Resolve plain-language document references like 'the FAQ document'."""
     query_lower = query.lower()
     matches = []
     try:
-        from backend.rag.store import get_vector_store
-        filenames = get_vector_store().get_all_files()
+        if filenames is None:
+            from backend.rag.store import get_vector_store
+            filenames = get_vector_store().get_all_files()
     except Exception as e:
         logger.debug(f"[PLANNER] Named doc resolution failed: {e}")
         return []
@@ -104,7 +123,23 @@ def _keyword_query(query: str) -> str:
     return " ".join(keywords[:12])
 
 
-def _indexed_acronyms(ttl_seconds: float = 30.0) -> set[str]:
+def _topic_terms(text: str) -> set[str]:
+    terms = set()
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9&/-]*", (text or "").lower()):
+        normalized = token.strip("-_/")
+        if len(normalized) >= 3 and normalized not in _QUERY_STOPWORDS:
+            terms.add(normalized)
+    return terms
+
+
+def _previous_topic_terms(state: AgentState) -> set[str]:
+    terms = _topic_terms(_previous_substantive_user_query(state) or _previous_user_query(state))
+    for target in _recent_target_context(state):
+        terms.update(_topic_terms(re.sub(r"\.[a-z0-9]+$", "", target.lower())))
+    return terms
+
+
+def _indexed_acronyms(ttl_seconds: float = 300.0) -> set[str]:
     now = time.monotonic()
     if _ACRONYM_CACHE["terms"] and (now - _ACRONYM_CACHE["loaded_at"]) < ttl_seconds:
         return set(_ACRONYM_CACHE["terms"])
@@ -113,7 +148,7 @@ def _indexed_acronyms(ttl_seconds: float = 30.0) -> set[str]:
     try:
         from backend.rag.store import get_vector_store
         store = get_vector_store()
-        store.refresh_collection()
+        store.refresh_collection(force=False)
         results = store.collection.get(include=["metadatas"], limit=1000)
         for meta in results.get("metadatas") or []:
             if not meta:
@@ -265,8 +300,15 @@ def _has_followup_signal(lower: str) -> bool:
         "limitations", "conclusions", "methodology", "future work", "compare",
         "summarize", "summarise", "summary", "everything", "author", "authors",
         "affiliation", "affiliations", "title", "abstract", "dataset", "results",
+        "gotcha", "gotchas", "catch", "catches", "caveat", "caveats",
     ]
     return _has_reference_pronoun(lower) or any(term in lower for term in followup_terms)
+
+
+def _is_target_correction(query: str, mentions: list[str]) -> bool:
+    if not mentions:
+        return False
+    return bool(re.search(r"\b(i\s+meant|i\s+ment|meant|actually|rather|instead)\b", query.lower()))
 
 
 def _is_rag_followup(query: str, state: AgentState) -> bool:
@@ -298,6 +340,41 @@ def _contextual_followup_query(query: str, state: AgentState) -> str:
         previous = _clean_query_text(previous, previous_mentions) or previous
         return f"{previous} {query}"
     return query
+
+
+def _target_correction_query(query: str, mentions: list[str], state: AgentState) -> str:
+    previous = _previous_substantive_user_query(state) or _previous_user_query(state)
+    if not previous:
+        return query
+    previous_mentions = _extract_mentions(previous)
+    cleaned_previous = _clean_query_text(previous, previous_mentions) or previous
+    cleaned_correction = _clean_query_text(query, mentions)
+    if cleaned_correction and not re.search(r"\b(i\s+meant|i\s+ment|meant|actually|rather|instead)\b", cleaned_correction.lower()):
+        return f"{cleaned_previous} {cleaned_correction}"
+    return cleaned_previous
+
+
+def _looks_like_new_subject(query: str, state: AgentState) -> bool:
+    query_terms = _topic_terms(query) - _DOC_DETAIL_TERMS
+    if len(query_terms) < 2:
+        return False
+    previous_terms = _previous_topic_terms(state)
+    if not previous_terms:
+        return False
+    return len(query_terms & previous_terms) == 0
+
+
+def _should_reuse_target_context(query: str, state: AgentState) -> bool:
+    lower = query.lower().strip()
+    if not _recent_target_context(state):
+        return False
+    if _is_explicit_chat_shift(lower) or _is_general_chat_query(lower):
+        return False
+    if _has_reference_pronoun(lower) or _LOW_INFORMATION_FOLLOWUP_RE.search(lower):
+        return True
+    if _looks_like_new_subject(query, state):
+        return False
+    return _has_followup_signal(lower)
 
 
 def _is_contextual_summary_request(query: str, state: AgentState) -> bool:
@@ -369,9 +446,27 @@ async def planner_node(state: AgentState):
         logger.info("[PLANNER] Mode: Forced Chat")
         return _chat_result(original_query, documents=state.get('documents', []))
 
-    mentions = _extract_mentions(original_query)
+    if mode == 'auto' and "@" not in original_query:
+        query_lower = original_query.lower()
+        if _is_explicit_chat_shift(original_query) or _is_general_chat_query(original_query):
+            logger.info("[PLANNER] Fast-Path: Chat (general/chat-shift query)")
+            return _chat_result(original_query)
+        for k in CHAT_KEYWORDS:
+            if _contains_keyword(query_lower, k):
+                logger.info(f"[PLANNER] Fast-Path: Chat (Keyword: '{k}')")
+                return _chat_result(original_query)
+
+    available_files: list[str] | None = None
+    try:
+        from backend.rag.store import get_vector_store
+        available_files = get_vector_store().get_all_files()
+    except Exception as e:
+        logger.debug(f"[PLANNER] File inventory lookup failed: {e}")
+        available_files = []
+
+    mentions = _extract_mentions(original_query, available_files)
     if not mentions:
-        mentions = _extract_named_doc_references(original_query)
+        mentions = _extract_named_doc_references(original_query, available_files)
 
     if mode == 'auto' and not mentions and "@" not in original_query:
         query_lower = original_query.lower()
@@ -390,10 +485,11 @@ async def planner_node(state: AgentState):
     if mode == 'rag' or mentions:
         forced_intent = "specific_doc_rag" if mentions else "direct_rag"
         logger.info(f"[PLANNER] Mode: Forced RAG / Mentions: {mentions}")
-        semantic_queries = _build_semantic_queries(cleaned_query or original_query, mentions, max_variants=2 if len(mentions) > 1 else 3)
+        retrieval_query = _target_correction_query(original_query, mentions, state) if _is_target_correction(original_query, mentions) else (cleaned_query or original_query)
+        semantic_queries = _build_semantic_queries(retrieval_query, mentions, max_variants=2 if len(mentions) > 1 else 3)
         return {
             "intent": forced_intent,
-            "query": cleaned_query or original_query,
+            "query": retrieval_query,
             "targeted_docs": mentions,
             "semantic_queries": semantic_queries,
             "documents": [],
@@ -416,7 +512,7 @@ async def planner_node(state: AgentState):
         if not mentions and _is_rag_followup(original_query, state):
             followup_query = _contextual_followup_query(cleaned_query or original_query, state)
             context_action = _context_action_for_followup(original_query, state, previous_targets)
-            if previous_targets:
+            if previous_targets and _should_reuse_target_context(original_query, state):
                 logger.info(f"[PLANNER] Fast-Path: Targeted RAG follow-up ({previous_targets})")
                 semantic_queries = _build_semantic_queries(followup_query, previous_targets, max_variants=3)
                 return {

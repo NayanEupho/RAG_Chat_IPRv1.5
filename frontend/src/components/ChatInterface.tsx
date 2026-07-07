@@ -9,7 +9,7 @@
  * - Navigation and session management.
  */
 import { useChat } from '@/hooks/useChat';
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import Sidebar from './Sidebar';
 import UserMenu from './UserMenu';
 import ThinkingProcess from './ThinkingProcess';
@@ -25,6 +25,271 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useRouter, useSearchParams } from 'next/navigation';
 import ModeSelector, { InteractionMode } from './ModeSelector';
 
+type ThoughtStep = {
+    type: 'thought' | 'tool_call' | 'error' | 'status' | 'result';
+    content: string;
+};
+
+type ChatMessage = {
+    role: 'user' | 'bot';
+    content: string;
+    intent?: string;
+    sources?: string[];
+    targeted_docs?: string[];
+    status?: string;
+    ttft?: number;
+    thoughts?: ThoughtStep[];
+};
+
+const parseEnvelopeTitle = (envelope: string) => {
+    const match = envelope.match(/Source:\s*([^|\]\n]+)/);
+    if (match && match[1]) {
+        const rawTitle = match[1].trim();
+        return rawTitle.split('/').pop() || rawTitle;
+    }
+    return "Document Chunk";
+};
+
+const parseEnvelopeMeta = (envelope: string) => {
+    const title = parseEnvelopeTitle(envelope);
+    const section = envelope.match(/Section(?:Path)?:\s*([^\]\n]+)/)?.[1]?.trim();
+    const chunkKind = envelope.match(/ChunkKind:\s*([^\]\n]+)/)?.[1]?.trim();
+    const chunkIndex = envelope.match(/ChunkIndex:\s*([^\]\n]+)/)?.[1]?.trim();
+    const preview = envelope
+        .split('\n')
+        .filter(line => !line.trim().startsWith('['))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return {
+        title,
+        section,
+        chunkKind,
+        chunkIndex,
+        preview: preview || envelope.replace(/\s+/g, ' ').trim()
+    };
+};
+
+type MessageRowProps = {
+    msg: ChatMessage;
+    idx: number;
+    isLast: boolean;
+    isSourceExpanded: boolean;
+    isCopied: boolean;
+    isLoading: boolean;
+    renderUserMessage: (content: string) => React.ReactNode;
+    copyToClipboard: (text: string, idx?: number) => Promise<void>;
+    openSourceModal: (sourceName: string, fullContent: string) => void;
+    handleOpenFile: (filename: string) => void;
+    toggleSources: (idx: number) => void;
+};
+
+const MessageRow = React.memo(function MessageRow({
+    msg,
+    idx,
+    isLast,
+    isSourceExpanded,
+    isCopied,
+    isLoading,
+    renderUserMessage,
+    copyToClipboard,
+    openSourceModal,
+    handleOpenFile,
+    toggleSources,
+}: MessageRowProps) {
+    const sourceList = msg.sources || [];
+
+    const renderCitationChildren = (children: React.ReactNode) => {
+        if (sourceList.length === 0) return children;
+
+        return React.Children.map(children, child => {
+            if (typeof child !== 'string') return child;
+
+            const parts = child.split(/(\[\d+\])/g);
+            return parts.map((part, partIdx) => {
+                const match = part.match(/^\[(\d+)\]$/);
+                if (!match) return part;
+
+                const sourceIndex = Number(match[1]) - 1;
+                const source = sourceList[sourceIndex];
+                if (!source) return part;
+
+                const title = parseEnvelopeTitle(source);
+                return (
+                    <button
+                        key={`${part}-${partIdx}`}
+                        className="inline-citation"
+                        onClick={() => openSourceModal(title, source)}
+                        title={`Open source ${match[1]}: ${title}`}
+                    >
+                        {match[1]}
+                    </button>
+                );
+            });
+        });
+    };
+
+    return (
+        <div className={`message-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`}>
+            <div className={`message-bubble ${msg.role}`}>
+                {msg.role === 'bot' && (
+                    <>
+                        <div className="message-meta">
+                            <div className="flex flex-col gap-1">
+                                {msg.targeted_docs && msg.targeted_docs.length > 0 ? (
+                                    <span className="meta-intent flex items-center gap-1" style={{ color: 'var(--accent-secondary)', fontWeight: 700 }}>
+                                        <Target size={12} className="animate-pulse" /> Targeted Search: {msg.targeted_docs.join(', ')}
+                                    </span>
+                                ) : msg.intent?.includes('rag') ? (
+                                    <span className="meta-intent" style={{ color: 'var(--accent-secondary)' }}>
+                                        <Database size={12} /> Knowledge Verified
+                                    </span>
+                                ) : (
+                                    <span className="meta-intent" style={{ color: 'var(--accent-primary)' }}>
+                                        <Cpu size={12} /> RAG Chat IPR
+                                    </span>
+                                )}
+                            </div>
+                            <button style={{ marginLeft: 'auto', opacity: 0.6 }} onClick={() => copyToClipboard(msg.content, idx)}>
+                                {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                            </button>
+                        </div>
+
+                        {msg.thoughts && msg.thoughts.length > 0 && (
+                            <ThinkingProcess
+                                thoughts={msg.thoughts}
+                                isFinished={!isLoading || !isLast}
+                                ttft={msg.ttft}
+                                hasStartedAnswer={msg.content.length > 0}
+                            />
+                        )}
+                    </>
+                )}
+
+                <div className="markdown-content">
+                    {msg.role === 'user' ? (
+                        <div className="user-message-content">{renderUserMessage(msg.content)}</div>
+                    ) : (
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                                p({ children }) {
+                                    return <p>{renderCitationChildren(children)}</p>;
+                                },
+                                li({ children }) {
+                                    return <li>{renderCitationChildren(children)}</li>;
+                                },
+                                code({ className, children, ...props }: { className?: string, children?: React.ReactNode }) {
+                                    const match = /language-(\w+)/.exec(className || '');
+                                    const inline = !className;
+                                    const codeContent = String(children).replace(/\n$/, '');
+
+                                    return !inline && match ? (
+                                        <div style={{ position: 'relative', marginTop: '1rem', marginBottom: '1rem' }}>
+                                            <div style={{
+                                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                                background: 'rgba(255,255,255,0.05)', padding: '6px 12px',
+                                                borderTopLeftRadius: '6px', borderTopRightRadius: '6px',
+                                                borderBottom: '1px solid var(--border-subtle)',
+                                                fontSize: '0.75rem', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)'
+                                            }}>
+                                                <span>{match[1]}</span>
+                                                <button
+                                                    onClick={() => copyToClipboard(codeContent)}
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-secondary)' }}
+                                                    title="Copy Code"
+                                                >
+                                                    <Copy size={12} /> Copy
+                                                </button>
+                                            </div>
+                                            <SyntaxHighlighter
+                                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                                style={vscDarkPlus as any}
+                                                language={match[1]}
+                                                PreTag="div"
+                                                customStyle={{ margin: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
+                                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                                {...(props as any)}
+                                            >
+                                                {codeContent}
+                                            </SyntaxHighlighter>
+                                        </div>
+                                    ) : (
+                                        <code className={className} {...props}>
+                                            {children}
+                                        </code>
+                                    );
+                                }
+                            }}
+                        >
+                            {msg.content}
+                        </ReactMarkdown>
+                    )}
+                </div>
+
+                {msg.role === 'bot' && sourceList.length > 0 && (
+                    <div className="sources-panel">
+                        <button
+                            className="sources-panel-header"
+                            onClick={() => toggleSources(idx)}
+                            aria-expanded={isSourceExpanded}
+                        >
+                            <div className="sources-panel-title">
+                                <Database size={14} />
+                                Sources
+                            </div>
+                            <div className="sources-panel-count">
+                                {sourceList.length} chunks
+                                <ChevronRight size={14} className={`sources-chevron ${isSourceExpanded ? 'open' : ''}`} />
+                            </div>
+                        </button>
+                        {isSourceExpanded && (
+                            <div className="sources-grid">
+                                {sourceList.map((src, i) => {
+                                    const meta = parseEnvelopeMeta(src);
+                                    const isTargeted = msg.targeted_docs?.some(d => src.includes(d));
+
+                                    return (
+                                        <div key={`${meta.title}-${i}`} className={`source-item ${isTargeted ? 'targeted' : ''}`}>
+                                            <button
+                                                className="source-item-main"
+                                                onClick={() => openSourceModal(meta.title, src)}
+                                                title={`Open raw chunk ${i + 1}`}
+                                            >
+                                                <span className="source-number">{i + 1}</span>
+                                                <span className="source-item-body">
+                                                    <span className="source-item-title">{meta.title}</span>
+                                                    {(meta.section || meta.chunkKind || meta.chunkIndex) && (
+                                                        <span className="source-item-meta">
+                                                            {[meta.section, meta.chunkKind, meta.chunkIndex ? `chunk ${meta.chunkIndex}` : ''].filter(Boolean).join(' / ')}
+                                                        </span>
+                                                    )}
+                                                    <span className="source-item-preview">{meta.preview}</span>
+                                                </span>
+                                            </button>
+                                            <button
+                                                className="source-file-link"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleOpenFile(meta.title);
+                                                }}
+                                                title={`Open ${meta.title}`}
+                                            >
+                                                <ArrowUpRight size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+});
+
 export default function ChatInterface() {
     const {
         messages, sendMessage, loading,
@@ -34,6 +299,8 @@ export default function ChatInterface() {
 
     const bottomRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const mentionMirrorRef = useRef<HTMLDivElement | null>(null);
+    const mentionMarkerRef = useRef<HTMLSpanElement | null>(null);
     const scrollFrameRef = useRef<number | null>(null);
     const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
     const router = useRouter();
@@ -100,6 +367,14 @@ export default function ChatInterface() {
         };
     }, [messages, loading]);
 
+    useEffect(() => {
+        return () => {
+            mentionMirrorRef.current?.remove();
+            mentionMirrorRef.current = null;
+            mentionMarkerRef.current = null;
+        };
+    }, []);
+
     // Auto-resize textarea
     const adjustTextareaHeight = useCallback(() => {
         const textarea = textareaRef.current;
@@ -152,7 +427,14 @@ export default function ChatInterface() {
 
     const updateMentionPosition = useCallback((textarea: HTMLTextAreaElement, cursorPos: number) => {
         const styles = window.getComputedStyle(textarea);
-        const mirror = document.createElement('div');
+        const mirror = mentionMirrorRef.current ?? document.createElement('div');
+        const marker = mentionMarkerRef.current ?? document.createElement('span');
+        if (!mentionMirrorRef.current) {
+            mentionMirrorRef.current = mirror;
+            mentionMarkerRef.current = marker;
+            marker.textContent = '\u200b';
+            document.body.appendChild(mirror);
+        }
         const properties: Array<[string, string]> = [
             ['box-sizing', 'box-sizing'],
             ['width', 'width'],
@@ -186,17 +468,13 @@ export default function ChatInterface() {
         mirror.style.overflow = 'hidden';
 
         const beforeCaret = textarea.value.substring(0, cursorPos);
-        const marker = document.createElement('span');
-        marker.textContent = '\u200b';
         mirror.textContent = beforeCaret;
         mirror.appendChild(marker);
-        document.body.appendChild(mirror);
 
         const markerRect = marker.getBoundingClientRect();
         const left = Math.min(Math.max(12, markerRect.left), window.innerWidth - 332);
         const top = Math.max(16, markerRect.top - textarea.scrollTop);
         setMentionPosition({ left, top });
-        document.body.removeChild(mirror);
     }, []);
 
     const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -256,71 +534,6 @@ export default function ChatInterface() {
         adjustTextareaHeight();
     };
 
-    /**
-     * Extracts the filename/title from a Platinum Document Envelope string.
-     * Preserves the full structural fidelity of the content for the modal.
-     */
-    const parseEnvelopeTitle = (envelope: string) => {
-        // Handle [Source: filename.pdf | Section: ...] or [Q&A | Source: ...]
-        const match = envelope.match(/Source:\s*([^|\]\n]+)/);
-        if (match && match[1]) {
-            const rawTitle = match[1].trim();
-            return rawTitle.split('/').pop() || rawTitle;
-        }
-        return "Document Chunk";
-    };
-
-    const parseEnvelopeMeta = (envelope: string) => {
-        const title = parseEnvelopeTitle(envelope);
-        const section = envelope.match(/Section(?:Path)?:\s*([^\]\n]+)/)?.[1]?.trim();
-        const chunkKind = envelope.match(/ChunkKind:\s*([^\]\n]+)/)?.[1]?.trim();
-        const chunkIndex = envelope.match(/ChunkIndex:\s*([^\]\n]+)/)?.[1]?.trim();
-        const preview = envelope
-            .split('\n')
-            .filter(line => !line.trim().startsWith('['))
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        return {
-            title,
-            section,
-            chunkKind,
-            chunkIndex,
-            preview: preview || envelope.replace(/\s+/g, ' ').trim()
-        };
-    };
-
-    const renderCitationChildren = (children: React.ReactNode, sources?: string[]) => {
-        if (!sources || sources.length === 0) return children;
-
-        return React.Children.map(children, child => {
-            if (typeof child !== 'string') return child;
-
-            const parts = child.split(/(\[\d+\])/g);
-            return parts.map((part, partIdx) => {
-                const match = part.match(/^\[(\d+)\]$/);
-                if (!match) return part;
-
-                const sourceIndex = Number(match[1]) - 1;
-                const source = sources[sourceIndex];
-                if (!source) return part;
-
-                const title = parseEnvelopeTitle(source);
-                return (
-                    <button
-                        key={`${part}-${partIdx}`}
-                        className="inline-citation"
-                        onClick={() => openSourceModal(title, source)}
-                        title={`Open source ${match[1]}: ${title}`}
-                    >
-                        {match[1]}
-                    </button>
-                );
-            });
-        });
-    };
-
     const triggerSend = () => {
         if (loading) return;
         if (inputValue.trim()) {
@@ -332,22 +545,22 @@ export default function ChatInterface() {
         }
     };
 
-    const openSourceModal = (sourceName: string, fullContent: string) => {
+    const openSourceModal = useCallback((sourceName: string, fullContent: string) => {
         setModalTitle(sourceName);
         setModalContent(fullContent);
         setModalType('source');
         setIsModalOpen(true);
-    };
+    }, []);
 
-    const getApiBase = () => {
+    const getApiBase = useCallback(() => {
         return "/api";
-    };
+    }, []);
 
-    const handleOpenFile = (filename: string) => {
+    const handleOpenFile = useCallback((filename: string) => {
         const url = `${getApiBase()}/files/${encodeURIComponent(filename)}`;
         window.open(url, '_blank');
         toast.info(`Opening ${filename}...`);
-    };
+    }, [getApiBase]);
 
     const handleShowDocuments = async () => {
         setModalTitle('Embedded Knowledge Base');
@@ -360,7 +573,7 @@ export default function ChatInterface() {
         setModalContent(docs);
     };
 
-    const copyToClipboard = async (text: string, idx?: number) => {
+    const copyToClipboard = useCallback(async (text: string, idx?: number) => {
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 await navigator.clipboard.writeText(text);
@@ -391,10 +604,10 @@ export default function ChatInterface() {
             console.error("Failed to copy:", err);
             toast.error("Failed to copy to clipboard");
         }
-    };
+    }, []);
 
     // Unified filteredDocs logic for modern tagging
-    const filteredDocs = allDocs.filter(doc => {
+    const filteredDocs = useMemo(() => allDocs.filter(doc => {
         const lowerDoc = doc.toLowerCase();
         const lowerQuery = mentionQuery.toLowerCase();
 
@@ -410,9 +623,9 @@ export default function ChatInterface() {
         const isAlreadyTagged = inputValue.toLowerCase().includes(`@${lowerDoc} `);
 
         return matches && !isAlreadyTagged;
-    }).slice(0, 10);
+    }).slice(0, 10), [allDocs, inputValue, mentionQuery]);
 
-    const fuzzyFileMatch = (doc: string, query: string) => {
+    const fuzzyFileMatch = useCallback((doc: string, query: string) => {
         const normalizedDoc = doc.toLowerCase();
         const normalizedQuery = query.trim().toLowerCase();
         if (!normalizedQuery) return true;
@@ -424,12 +637,18 @@ export default function ChatInterface() {
             cursor += 1;
         }
         return true;
-    };
+    }, []);
 
-    const modalDocs = Array.isArray(modalContent) ? modalContent as string[] : [];
-    const filteredModalDocs = modalDocs.filter(doc => fuzzyFileMatch(doc, kbSearch));
+    const modalDocs = useMemo(
+        () => Array.isArray(modalContent) ? modalContent as string[] : [],
+        [modalContent]
+    );
+    const filteredModalDocs = useMemo(
+        () => modalDocs.filter(doc => fuzzyFileMatch(doc, kbSearch)),
+        [fuzzyFileMatch, kbSearch, modalDocs]
+    );
 
-    const renderUserMessage = (content: string) => {
+    const renderUserMessage = useCallback((content: string) => {
         const matches: Array<{ start: number; end: number; doc: string }> = [];
         for (const doc of [...allDocs].sort((a, b) => b.length - a.length)) {
             const needle = `@${doc}`.toLowerCase();
@@ -457,7 +676,11 @@ export default function ChatInterface() {
         });
         if (cursor < content.length) parts.push(content.slice(cursor));
         return parts;
-    };
+    }, [allDocs]);
+
+    const toggleSources = useCallback((idx: number) => {
+        setExpandedSources(prev => ({ ...prev, [idx]: !prev[idx] }));
+    }, []);
 
 
 
@@ -485,170 +708,22 @@ export default function ChatInterface() {
 
                 <div className="messages-container">
                     <div className="messages-wrapper">
-                        {messages.map((msg, idx) => {
-                            const sourceList = msg.sources || [];
-
-                            return (
-                            <div key={idx} className={`message-row ${msg.role === 'user' ? 'user-row' : 'bot-row'}`}>
-                                <div className={`message-bubble ${msg.role}`}>
-                                    {msg.role === 'bot' && (
-                                        <>
-                                            <div className="message-meta">
-                                                <div className="flex flex-col gap-1">
-                                                    {msg.targeted_docs && msg.targeted_docs.length > 0 ? (
-                                                        <span className="meta-intent flex items-center gap-1" style={{ color: 'var(--accent-secondary)', fontWeight: 700 }}>
-                                                            <Target size={12} className="animate-pulse" /> Targeted Search: {msg.targeted_docs.join(', ')}
-                                                        </span>
-                                                    ) : msg.intent?.includes('rag') ? (
-                                                        <span className="meta-intent" style={{ color: 'var(--accent-secondary)' }}>
-                                                            <Database size={12} /> Knowledge Verified
-                                                        </span>
-                                                    ) : (
-                                                        <span className="meta-intent" style={{ color: 'var(--accent-primary)' }}>
-                                                            <Cpu size={12} /> RAG Chat IPR
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <button style={{ marginLeft: 'auto', opacity: 0.6 }} onClick={() => copyToClipboard(msg.content, idx)}>
-                                                    {copiedIdx === idx ? <Check size={14} /> : <Copy size={14} />}
-                                                </button>
-                                            </div>
-
-                                            {/* Thinking Process Integration */}
-                                            {msg.thoughts && msg.thoughts.length > 0 && (
-                                                <ThinkingProcess
-                                                    thoughts={msg.thoughts}
-                                                    isFinished={!loading || idx !== messages.length - 1}
-                                                    ttft={msg.ttft}
-                                                    hasStartedAnswer={msg.content.length > 0}
-                                                />
-                                            )}
-                                        </>
-                                    )}
-
-                                    <div className="markdown-content">
-                                        {msg.role === 'user' ? (
-                                            <div className="user-message-content">{renderUserMessage(msg.content)}</div>
-                                        ) : (
-                                        <ReactMarkdown
-                                            remarkPlugins={[remarkGfm]}
-                                            components={{
-                                                p({ children }) {
-                                                    return <p>{renderCitationChildren(children, sourceList)}</p>;
-                                                },
-                                                li({ children }) {
-                                                    return <li>{renderCitationChildren(children, sourceList)}</li>;
-                                                },
-                                                code({ className, children, ...props }: { className?: string, children?: React.ReactNode }) {
-                                                    const match = /language-(\w+)/.exec(className || '')
-                                                    const inline = !className;
-                                                    const codeContent = String(children).replace(/\n$/, '');
-
-                                                    return !inline && match ? (
-                                                        <div style={{ position: 'relative', marginTop: '1rem', marginBottom: '1rem' }}>
-                                                            <div style={{
-                                                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                                background: 'rgba(255,255,255,0.05)', padding: '6px 12px',
-                                                                borderTopLeftRadius: '6px', borderTopRightRadius: '6px',
-                                                                borderBottom: '1px solid var(--border-subtle)',
-                                                                fontSize: '0.75rem', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)'
-                                                            }}>
-                                                                <span>{match[1]}</span>
-                                                                <button
-                                                                    onClick={() => copyToClipboard(codeContent)}
-                                                                    style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-secondary)' }}
-                                                                    title="Copy Code"
-                                                                >
-                                                                    <Copy size={12} /> Copy
-                                                                </button>
-                                                            </div>
-                                                            <SyntaxHighlighter
-                                                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                                                style={vscDarkPlus as any}
-                                                                language={match[1]}
-                                                                PreTag="div"
-                                                                customStyle={{ margin: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
-                                                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                                                {...(props as any)}
-                                                            >
-                                                                {codeContent}
-                                                            </SyntaxHighlighter>
-                                                        </div>
-                                                    ) : (
-                                                        <code className={className} {...props}>
-                                                            {children}
-                                                        </code>
-                                                    )
-                                                }
-                                            }}
-                                        >
-                                            {msg.content}
-                                        </ReactMarkdown>
-                                        )}
-                                    </div>
-
-                                    {msg.role === 'bot' && sourceList.length > 0 && (
-                                        <div className="sources-panel">
-                                            <button
-                                                className="sources-panel-header"
-                                                onClick={() => setExpandedSources(prev => ({ ...prev, [idx]: !prev[idx] }))}
-                                                aria-expanded={expandedSources[idx] === true}
-                                            >
-                                                <div className="sources-panel-title">
-                                                    <Database size={14} />
-                                                    Sources
-                                                </div>
-                                                <div className="sources-panel-count">
-                                                    {sourceList.length} chunks
-                                                    <ChevronRight size={14} className={`sources-chevron ${expandedSources[idx] ? 'open' : ''}`} />
-                                                </div>
-                                            </button>
-                                            {expandedSources[idx] && (
-                                                <div className="sources-grid">
-                                                    {sourceList.map((src, i) => {
-                                                        const meta = parseEnvelopeMeta(src);
-                                                        const isTargeted = msg.targeted_docs?.some(d => src.includes(d));
-
-                                                        return (
-                                                            <div key={`${meta.title}-${i}`} className={`source-item ${isTargeted ? 'targeted' : ''}`}>
-                                                                <button
-                                                                    className="source-item-main"
-                                                                    onClick={() => openSourceModal(meta.title, src)}
-                                                                    title={`Open raw chunk ${i + 1}`}
-                                                                >
-                                                                    <span className="source-number">{i + 1}</span>
-                                                                    <span className="source-item-body">
-                                                                        <span className="source-item-title">{meta.title}</span>
-                                                                        {(meta.section || meta.chunkKind || meta.chunkIndex) && (
-                                                                            <span className="source-item-meta">
-                                                                                {[meta.section, meta.chunkKind, meta.chunkIndex ? `chunk ${meta.chunkIndex}` : ''].filter(Boolean).join(' / ')}
-                                                                            </span>
-                                                                        )}
-                                                                        <span className="source-item-preview">{meta.preview}</span>
-                                                                    </span>
-                                                                </button>
-                                                                <button
-                                                                    className="source-file-link"
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        handleOpenFile(meta.title);
-                                                                    }}
-                                                                    title={`Open ${meta.title}`}
-                                                                >
-                                                                    <ArrowUpRight size={14} />
-                                                                </button>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                </div>
-                            </div>
-                            );
-                        })}
+                        {messages.map((msg, idx) => (
+                            <MessageRow
+                                key={idx}
+                                msg={msg}
+                                idx={idx}
+                                isLast={idx === messages.length - 1}
+                                isSourceExpanded={expandedSources[idx] === true}
+                                isCopied={copiedIdx === idx}
+                                isLoading={loading}
+                                renderUserMessage={renderUserMessage}
+                                copyToClipboard={copyToClipboard}
+                                openSourceModal={openSourceModal}
+                                handleOpenFile={handleOpenFile}
+                                toggleSources={toggleSources}
+                            />
+                        ))}
                         <div ref={bottomRef} />
                     </div>
                 </div>
