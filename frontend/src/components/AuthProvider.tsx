@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, ReactNode, useCallback } from 'react';
+import { useEffect, useState, ReactNode, useCallback } from 'react';
 import { AuthContext } from '@/hooks/useAuth';
 
 interface User {

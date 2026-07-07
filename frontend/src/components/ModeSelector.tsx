@@ -6,7 +6,7 @@
  * 'RAG' (Knowledge Base Only), and 'Chat' (Direct LLM) modes.
  */
 
-import React, { useState } from "react";
+import { useState } from "react";
 import { ChevronDown, Globe, MessageSquare, Database } from "lucide-react";
 import styles from "./ModeSelector.module.css";
 

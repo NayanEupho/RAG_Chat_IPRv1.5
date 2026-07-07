@@ -290,7 +290,9 @@ export function useChat() {
                 accumulatedContent += token;
                 if (firstTokenAt === undefined) firstTokenAt = Date.now();
                 scheduleTokenFlush();
-              } catch { }
+              } catch {
+                // Ignore malformed token fragments; the stream end event remains authoritative.
+              }
             } else if (currentEvent === 'end') {
               streamEnded = true;
               try {
@@ -327,7 +329,9 @@ export function useChat() {
                     detail: { session_id: sid, title: metadata.session_title }
                   }));
                 }
-              } catch { }
+              } catch {
+                // Ignore malformed end metadata after flushing visible token content.
+              }
             } else if (currentEvent === 'error') {
               toast.error(`System Error: ${eventData}`);
               setMessages(prev => {
