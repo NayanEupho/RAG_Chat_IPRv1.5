@@ -12,7 +12,14 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.graph.nodes.retriever import stitch_fragments
-from backend.graph.nodes.retriever import _apply_source_precision, _effective_top_k, _format_retrieved_docs, _hybrid_score, _query_variants
+from backend.graph.nodes.retriever import (
+    _apply_source_precision,
+    _effective_top_k,
+    _ensure_target_coverage,
+    _format_retrieved_docs,
+    _hybrid_score,
+    _query_variants,
+)
 
 class TestRetrieverStitching(unittest.TestCase):
     def test_basic_stitching(self):
@@ -165,6 +172,39 @@ class TestRetrieverStitching(unittest.TestCase):
 
         assert filtered[0]["metadata"]["filename"] == "LeaveAtaGlance.pdf"
         assert all(d["metadata"]["filename"] == "LeaveAtaGlance.pdf" for d in filtered)
+
+    def test_target_coverage_keeps_each_explicit_target_when_candidates_exist(self):
+        ranked = [
+            {
+                "page_content": "Earned Leave can be accumulated up to 300 days.",
+                "metadata": {"filename": "LeaveAtaGlance.pdf", "chunk_index": 4},
+                "_score": 0.92,
+            },
+            {
+                "page_content": "Restricted Holiday can be prefixed or suffixed to other leave.",
+                "metadata": {"filename": "LeaveAtaGlance.pdf", "chunk_index": 5},
+                "_score": 0.88,
+            },
+        ]
+        candidates = ranked + [
+            {
+                "page_content": "LTDP eligibility covers service criteria and salary protections.",
+                "metadata": {"filename": "FAQ_LTDP_28Dec11.pdf", "chunk_index": 3},
+                "_score": 0.57,
+            }
+        ]
+
+        covered = _ensure_target_coverage(
+            ranked_docs=ranked,
+            candidate_pool=candidates,
+            targeted_docs=["FAQ_LTDP_28Dec11.pdf", "LeaveAtaGlance.pdf"],
+            top_k=2,
+        )
+
+        assert {doc["metadata"]["filename"] for doc in covered} == {
+            "FAQ_LTDP_28Dec11.pdf",
+            "LeaveAtaGlance.pdf",
+        }
 
     def test_exact_acronym_title_beats_near_acronym_table_row(self):
         eol = {

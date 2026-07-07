@@ -303,6 +303,17 @@ def test_gotcha_followup_stays_in_recent_target_context():
     assert _should_reuse_target_context("some other gotcha or catches that we need to keep in mind", rag_state)
 
 
+def test_generic_need_phrase_does_not_match_attention_filename():
+    files = ["attention_is_all_you_need.pdf", "LeaveAtaGlance.pdf"]
+
+    matches = _extract_named_doc_references(
+        "some other gotcha or catches that we need to keep in mind",
+        files,
+    )
+
+    assert matches == []
+
+
 def test_new_subject_does_not_reuse_previous_target_context():
     rag_state = {
         "last_targeted_docs": ["LeaveAtaGlance.pdf"],

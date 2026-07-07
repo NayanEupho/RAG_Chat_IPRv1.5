@@ -13,7 +13,7 @@ from backend.graph.state import AgentState
 from backend.rag.store import get_vector_store
 from backend.llm.client import OllamaClientWrapper
 from backend.llm.health import ModelUnavailableError, ensure_rag_ready
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 import hashlib
 import logging
 import asyncio
@@ -25,13 +25,28 @@ from backend.config import get_config
 logger = logging.getLogger(__name__)
 
 # Global LRU-style cache for embeddings to reduce Ollama API load
-_embedding_cache = {}
+_embedding_cache: OrderedDict[str, list] = OrderedDict()
 _embedding_inflight: dict[str, asyncio.Task] = {}
 _embedding_inflight_lock = asyncio.Lock()
+_EMBEDDING_CACHE_MAX_SIZE = 1024
 
 
 def _embedding_cache_key(query: str, model: str) -> str:
     return hashlib.md5(f"{query}:{model}".encode()).hexdigest()
+
+
+def _get_cached_embedding_value(cache_key: str) -> list | None:
+    cached = _embedding_cache.get(cache_key)
+    if cached is not None:
+        _embedding_cache.move_to_end(cache_key)
+    return cached
+
+
+def _set_cached_embedding_value(cache_key: str, embedding: list) -> None:
+    _embedding_cache[cache_key] = embedding
+    _embedding_cache.move_to_end(cache_key)
+    while len(_embedding_cache) > _EMBEDDING_CACHE_MAX_SIZE:
+        _embedding_cache.popitem(last=False)
 
 def _normalize_filename(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
@@ -73,13 +88,24 @@ async def get_cached_embeddings(queries: list[str], model: str) -> dict[str, lis
 
     results: dict[str, list] = {}
     tasks_to_await: list[asyncio.Task] = []
-    queries_to_fetch: list[str] = []
+    cache_misses: list[str] = []
+    for query in unique_queries:
+        cache_key = _embedding_cache_key(query, model)
+        cached = _get_cached_embedding_value(cache_key)
+        if cached is not None:
+            logger.debug(f"Embedding cache HIT for query: {query[:30]}...")
+            results[query] = cached
+        else:
+            cache_misses.append(query)
+
     async with _embedding_inflight_lock:
-        for query in unique_queries:
+        queries_to_fetch: list[str] = []
+        for query in cache_misses:
             cache_key = _embedding_cache_key(query, model)
-            if cache_key in _embedding_cache:
+            cached = _get_cached_embedding_value(cache_key)
+            if cached is not None:
                 logger.debug(f"Embedding cache HIT for query: {query[:30]}...")
-                results[query] = _embedding_cache[cache_key]
+                results[query] = cached
             elif cache_key in _embedding_inflight:
                 tasks_to_await.append(_embedding_inflight[cache_key])
             else:
@@ -120,11 +146,7 @@ async def _fetch_and_cache_embeddings(missing_queries: list[str], model: str) ->
             if not embedding:
                 raise ModelUnavailableError("Embedding model returned no vector")
             cached_embedding = embedding if isinstance(embedding[0], list) else [embedding]
-            if len(_embedding_cache) > 1000:
-                keys_to_remove = list(_embedding_cache.keys())[:500]
-                for key in keys_to_remove:
-                    del _embedding_cache[key]
-            _embedding_cache[_embedding_cache_key(query, model)] = cached_embedding
+            _set_cached_embedding_value(_embedding_cache_key(query, model), cached_embedding)
             results[query] = cached_embedding
             logger.debug(f"Embedding cache MISS, cached for query: {query[:30]}...")
 
@@ -494,6 +516,63 @@ def _apply_source_precision(query: str, docs: list[dict], top_k: int) -> list[di
     return docs
 
 
+def _ensure_target_coverage(ranked_docs: list[dict], candidate_pool: list[dict], targeted_docs: list[str], top_k: int) -> list[dict]:
+    """Ensure explicit multi-document targets are represented when candidates exist."""
+    if len(targeted_docs) <= 1 or not candidate_pool:
+        return ranked_docs
+
+    present = {
+        doc.get("metadata", {}).get("filename")
+        for doc in ranked_docs
+        if doc.get("metadata", {}).get("filename")
+    }
+    missing_targets = [target for target in targeted_docs if target not in present]
+    if not missing_targets:
+        return ranked_docs
+
+    additions = []
+    for target in missing_targets:
+        target_candidates = [
+            doc for doc in candidate_pool
+            if doc.get("metadata", {}).get("filename") == target
+        ]
+        if target_candidates:
+            additions.append(max(target_candidates, key=lambda doc: doc.get("_score", 0.0)))
+
+    if not additions:
+        return ranked_docs
+
+    protected_by_file: dict[str, dict] = {}
+    combined = _dedupe_docs(ranked_docs + additions)
+    for target in targeted_docs:
+        target_docs = [
+            doc for doc in combined
+            if doc.get("metadata", {}).get("filename") == target
+        ]
+        if target_docs:
+            protected_by_file[target] = max(target_docs, key=lambda doc: doc.get("_score", 0.0))
+
+    protected = list(protected_by_file.values())
+    protected_ids = {
+        (
+            doc.get("metadata", {}).get("filename"),
+            doc.get("metadata", {}).get("chunk_index"),
+            doc.get("page_content", "")[:80],
+        )
+        for doc in protected
+    }
+    rest = [
+        doc for doc in combined
+        if (
+            doc.get("metadata", {}).get("filename"),
+            doc.get("metadata", {}).get("chunk_index"),
+            doc.get("page_content", "")[:80],
+        ) not in protected_ids
+    ]
+    rest.sort(key=lambda doc: doc.get("_score", 0.0), reverse=True)
+    return (protected + rest)[:top_k]
+
+
 def _dedupe_docs(docs: list[dict]) -> list[dict]:
     seen = set()
     deduped = []
@@ -627,10 +706,10 @@ async def retrieve_documents(state: AgentState):
         metrics["embedding_total_ms"] = metrics["embedding_ms"]
 
     search_start = time.monotonic()
+    intro_terms = ["about", "overview", "purpose", "scope", "summarize", "summary", "author", "authors", "affiliation", "title", "abstract"]
+    should_fetch_intro = any(term in query.lower() for term in intro_terms)
 
     async def fetch_intro(doc_name: str):
-        if not any(term in query.lower() for term in ["about", "overview", "purpose", "scope", "summarize", "summary", "author", "authors", "affiliation", "title", "abstract"]):
-            return []
         try:
             intro_where = {"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 2}}]}
             intro_results = store.get_by_metadata(where=intro_where, limit=2)
@@ -702,7 +781,6 @@ async def retrieve_documents(state: AgentState):
         """Pull immediate neighbors for strong targeted hits with thin/parent context."""
         if not has_targets or not docs:
             return []
-        adjacent = []
         seen = {
             (
                 d.get("metadata", {}).get("filename"),
@@ -710,6 +788,7 @@ async def retrieve_documents(state: AgentState):
             )
             for d in docs
         }
+        neighbor_requests = []
         for doc in docs[:top_k]:
             meta = doc.get("metadata", {})
             filename = meta.get("filename")
@@ -732,30 +811,41 @@ async def retrieve_documents(state: AgentState):
                 key = (filename, idx)
                 if key in seen:
                     continue
-                try:
-                    result = store.get_by_metadata(
-                        where={"$and": [{"filename": {"$eq": filename}}, {"chunk_index": {"$eq": idx}}]},
-                        limit=1,
-                    )
-                except Exception as e:
-                    logger.debug(f"[RETRIEVER] Adjacent context fetch skipped for {filename}#{idx}: {e}")
+                seen.add(key)
+                neighbor_requests.append((doc, filename, idx))
+
+        async def fetch_neighbor(doc: dict, filename: str, idx: int):
+            try:
+                result = await asyncio.to_thread(
+                    store.get_by_metadata,
+                    where={"$and": [{"filename": {"$eq": filename}}, {"chunk_index": {"$eq": idx}}]},
+                    limit=1,
+                )
+            except Exception as e:
+                logger.debug(f"[RETRIEVER] Adjacent context fetch skipped for {filename}#{idx}: {e}")
+                return []
+            adjacent_docs = []
+            docs_found = result.get("documents") or []
+            metas_found = result.get("metadatas") or []
+            for content, adjacent_meta in zip(docs_found, metas_found):
+                if len((content or "").strip()) < 40:
                     continue
-                docs_found = result.get("documents") or []
-                metas_found = result.get("metadatas") or []
-                for content, adjacent_meta in zip(docs_found, metas_found):
-                    if len((content or "").strip()) < 40:
-                        continue
-                    seen.add(key)
-                    adjacent.append({
-                        "page_content": content,
-                        "metadata": adjacent_meta,
-                        "_vector_score": max(0.0, doc.get("_vector_score", 0.0) - 0.06),
-                        "_query": doc.get("_query", query),
-                    })
+                adjacent_docs.append({
+                    "page_content": content,
+                    "metadata": adjacent_meta,
+                    "_vector_score": max(0.0, doc.get("_vector_score", 0.0) - 0.06),
+                    "_query": doc.get("_query", query),
+                })
+            return adjacent_docs
+
+        if not neighbor_requests:
+            return []
+        batches = await asyncio.gather(*(fetch_neighbor(*request) for request in neighbor_requests))
+        adjacent = [doc for batch in batches for doc in batch]
         return adjacent
 
     tasks = [run_vector_query(plan) for plan in query_plan]
-    if targeted_docs:
+    if targeted_docs and should_fetch_intro:
         tasks.extend(fetch_intro(doc) for doc in targeted_docs)
 
     batches = await asyncio.gather(*tasks)
@@ -809,6 +899,18 @@ async def retrieve_documents(state: AgentState):
         metrics["adjacent_context_count"] = len(adjacent_docs)
         ranked_docs = ranked_docs[:top_k]
     ranked_docs = _apply_source_precision(query, ranked_docs, top_k)
+    before_coverage_files = {
+        doc.get("metadata", {}).get("filename")
+        for doc in ranked_docs
+        if doc.get("metadata", {}).get("filename")
+    }
+    ranked_docs = _ensure_target_coverage(ranked_docs, candidates, targeted_docs, top_k)
+    after_coverage_files = {
+        doc.get("metadata", {}).get("filename")
+        for doc in ranked_docs
+        if doc.get("metadata", {}).get("filename")
+    }
+    metrics["target_coverage_added"] = max(0, len(after_coverage_files - before_coverage_files))
     metrics["ranked_count"] = len(ranked_docs)
 
     final_docs = stitch_fragments(ranked_docs)

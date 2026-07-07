@@ -27,6 +27,12 @@ _QUERY_STOPWORDS = {
     "which", "who", "why", "with"
 }
 
+_FILENAME_REFERENCE_STOPWORDS = _QUERY_STOPWORDS | {
+    "about", "all", "another", "catch", "catches", "caveat", "caveats",
+    "document", "file", "gotcha", "gotchas", "important", "keep", "mind",
+    "need", "other", "paper", "pdf", "point", "points", "some", "you",
+}
+
 _DOC_DETAIL_TERMS = {
     "author", "authors", "affiliation", "affiliations", "title", "abstract",
     "summary", "summarize", "summarise", "overview", "details", "more",
@@ -94,7 +100,8 @@ def _extract_named_doc_references(query: str, filenames: list[str] | None = None
         # generic words unless they identify a single indexed file.
         strong_parts = [
             p for p in parts
-            if p not in {"pdf", "doc", "document", "general", "upload", "docs"}
+            if p not in _FILENAME_REFERENCE_STOPWORDS
+            and p not in {"doc", "general", "upload", "docs"}
             and (len(p) >= 4 or p in {"faq", "qna"})
         ]
         if any(re.search(rf"\b{re.escape(part)}\b", query_lower) for part in strong_parts):
