@@ -18,6 +18,7 @@ from backend.graph.nodes.generate import (
 )
 from backend.graph.nodes.planner import (
     _ACRONYM_CACHE,
+    _build_semantic_queries,
     _contains_keyword,
     _context_action_for_followup,
     _contextual_followup_query,
@@ -259,7 +260,7 @@ def test_targeted_author_followup_stays_in_previous_document_context():
     assert _context_action_for_followup("who are the authors", rag_state, ["Qlora_Paper.pdf"]) == "retrieve"
     rewritten = _contextual_followup_query("who are the authors", rag_state)
     assert "Qlora_Paper.pdf" not in rewritten
-    assert rewritten.startswith("What is")
+    assert rewritten == "who are the authors"
 
 
 def test_persisted_target_context_restores_short_author_followup():
@@ -274,7 +275,53 @@ def test_persisted_target_context_restores_short_author_followup():
 
     assert _is_rag_followup("who are the authors", rag_state)
     rewritten = _contextual_followup_query("who are the authors", rag_state)
-    assert rewritten == "What is paper about who are the authors"
+    assert rewritten == "who are the authors"
+
+
+def test_concrete_pronoun_followup_does_not_repeat_previous_question():
+    rag_state = {
+        "last_targeted_docs": ["TECHNICAL_REPORT_V8.pdf"],
+        "messages": [
+            HumanMessage(content="what is @TECHNICAL_REPORT_V8.pdf about ? tell me the author and tech stack"),
+            AIMessage(content="The report is about a DevOps Agent. Author: Nayan Modi."),
+            HumanMessage(content="what is core agentic concepts that it relies on ?"),
+        ],
+    }
+
+    assert _is_rag_followup("what is core agentic concepts that it relies on ?", rag_state)
+    assert _should_reuse_target_context("what is core agentic concepts that it relies on ?", rag_state)
+    rewritten = _contextual_followup_query("what is core agentic concepts that it relies on ?", rag_state)
+    assert rewritten == "what is core agentic concepts that it relies on ?"
+
+
+def test_feature_problem_followup_does_not_repeat_previous_question():
+    rag_state = {
+        "last_targeted_docs": ["TECHNICAL_REPORT_V8.pdf"],
+        "messages": [
+            HumanMessage(content="what is core agentic concepts that it relies on ?"),
+            AIMessage(content="It relies on tools-not-rules and hub-and-spoke orchestration."),
+            HumanMessage(content="what feature and problems does it solve ?"),
+        ],
+    }
+
+    assert _is_rag_followup("what feature and problems does it solve ?", rag_state)
+    assert _should_reuse_target_context("what feature and problems does it solve ?", rag_state)
+    rewritten = _contextual_followup_query("what feature and problems does it solve ?", rag_state)
+    assert rewritten == "what feature and problems does it solve ?"
+
+
+def test_technical_report_followup_queries_expand_for_concepts_and_problems():
+    concept_plan = _build_semantic_queries(
+        "what core agentic concepts does it rely on",
+        ["TECHNICAL_REPORT_V8.pdf"],
+    )
+    problem_plan = _build_semantic_queries(
+        "what features and problems does it solve",
+        ["TECHNICAL_REPORT_V8.pdf"],
+    )
+
+    assert any("hub spoke" in item["query"] and "mcp" in item["query"] for item in concept_plan)
+    assert any("cognitive load" in item["query"] and "context switching" in item["query"] for item in problem_plan)
 
 
 def test_persisted_target_context_does_not_capture_unrelated_short_query():

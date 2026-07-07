@@ -39,7 +39,8 @@ _DOC_DETAIL_TERMS = {
     "eligibility", "eligible", "criteria", "benefit", "benefits", "limitation",
     "limitations", "conclusion", "conclusions", "methodology", "results",
     "future", "work", "gotcha", "gotchas", "catch", "catches", "caveat",
-    "caveats", "important", "points", "keep", "mind",
+    "caveats", "important", "points", "keep", "mind", "concept", "concepts",
+    "feature", "features", "problem", "problems", "solve", "solves",
 }
 
 _LOW_INFORMATION_FOLLOWUP_RE = re.compile(
@@ -209,6 +210,10 @@ def _build_semantic_queries(query: str, targets: list[str] | None = None, max_va
     lower = base_query.lower()
     if any(term in lower for term in ["eligibility", "criteria", "eligible", "who can"]):
         variants.append(f"{keyword_query or base_query} eligible services officers service requirements criteria")
+    elif any(term in lower for term in ["agentic", "concept", "concepts", "architecture philosophy"]):
+        variants.append(f"{keyword_query or base_query} tools not rules hub spoke model mcp model context protocol brain chef")
+    elif any(term in lower for term in ["feature", "features", "problem", "problems", "solve", "solves"]):
+        variants.append(f"{keyword_query or base_query} cognitive load friction context switching syntax recall catastrophic risk tool silos semantic middleware")
     elif any(term in lower for term in ["summary", "summarize", "overview", "about"]):
         variants.append(f"{keyword_query or base_query} overview purpose scope summary")
     elif any(term in lower for term in ["benefit", "allowance", "entitlement"]):
@@ -308,6 +313,8 @@ def _has_followup_signal(lower: str) -> bool:
         "summarize", "summarise", "summary", "everything", "author", "authors",
         "affiliation", "affiliations", "title", "abstract", "dataset", "results",
         "gotcha", "gotchas", "catch", "catches", "caveat", "caveats",
+        "concept", "concepts", "feature", "features", "problem", "problems",
+        "solve", "solves",
     ]
     return _has_reference_pronoun(lower) or any(term in lower for term in followup_terms)
 
@@ -337,12 +344,10 @@ def _is_rag_followup(query: str, state: AgentState) -> bool:
 def _contextual_followup_query(query: str, state: AgentState) -> str:
     lower = query.lower()
     previous = _previous_substantive_user_query(state) or _previous_user_query(state)
-    recent_targets = _recent_target_context(state)
-    if previous and (
-        _has_reference_pronoun(lower)
-        or re.search(r"\b(tell me more|more details|summari[sz]e everything|summary|what about)\b", lower)
-        or (recent_targets and len(lower) <= 120 and _has_followup_signal(lower))
-    ):
+    low_information = bool(re.search(r"\b(tell me more|more details|summari[sz]e everything|summary|what about)\b", lower))
+    substantive_focus = _topic_terms(query)
+    pronoun_needs_previous = _has_reference_pronoun(lower) and len(substantive_focus) < 2
+    if previous and (low_information or pronoun_needs_previous):
         previous_mentions = _extract_mentions(previous)
         previous = _clean_query_text(previous, previous_mentions) or previous
         return f"{previous} {query}"

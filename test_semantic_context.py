@@ -197,6 +197,33 @@ SCENARIOS = [
         ],
     ),
     Scenario(
+        name="technical_report_followup_no_repetition",
+        turns=[
+            TurnSpec(
+                query="What is @TECHNICAL_REPORT_V8.pdf about? Tell me the author and what tech stack is used for the project.",
+                expected_sources=["TECHNICAL_REPORT_V8.pdf"],
+                expected_intents={"specific_doc_rag"},
+                required_terms=["DevOps Agent", "Nayan Modi", "Python"],
+            ),
+            TurnSpec(
+                query="what core agentic concepts does it rely on?",
+                expected_sources=["TECHNICAL_REPORT_V8.pdf"],
+                expected_intents={"specific_doc_rag"},
+                required_terms=["Tools", "Hub", "MCP"],
+                forbidden_terms=["Author:", "Tech Stack:", "Python 3.11"],
+                notes="Concrete follow-up should not repeat the prior author/tech-stack answer.",
+            ),
+            TurnSpec(
+                query="what features and problems does it solve?",
+                expected_sources=["TECHNICAL_REPORT_V8.pdf"],
+                expected_intents={"specific_doc_rag"},
+                required_terms=["cognitive load", "context switching"],
+                forbidden_terms=["Author:", "Tech Stack:", "Python 3.11"],
+                notes="Feature/problem follow-up should stay on the target document without restating old sections.",
+            ),
+        ],
+    ),
+    Scenario(
         name="topic_shift_from_leave_to_transformer",
         turns=[
             TurnSpec(

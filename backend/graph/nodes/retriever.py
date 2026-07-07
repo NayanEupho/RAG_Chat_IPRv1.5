@@ -523,7 +523,10 @@ def _target_lexical_score(query: str, doc: dict) -> float:
     high_signal_terms = {
         "eligibility", "eligible", "criteria", "requirement", "requirements",
         "service", "services", "officer", "officers", "casual", "earned",
-        "commuted", "paternity", "study",
+        "commuted", "paternity", "study", "agentic", "concept", "concepts",
+        "hub", "spoke", "mcp", "protocol", "brain", "chef", "cognitive",
+        "load", "friction", "context", "switching", "syntax", "recall",
+        "catastrophic", "risk", "silos", "semantic", "middleware",
     }
     for token in q_tokens:
         if token in high_signal_terms and has_token(token, haystack):
