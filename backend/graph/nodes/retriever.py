@@ -458,6 +458,13 @@ def _hybrid_score(query: str, doc: dict) -> float:
     if any(token in q_tokens for token in {"technology", "technologies", "stack", "component", "framework", "tool"}):
         if "component breakdown" in title_text or re.search(r"\bcomponent:\s+", haystack):
             technology_boost = 0.42
+    intro_boost = 0.0
+    if re.search(r"\b(about|overview|summary|summari[sz]e|purpose|scope)\b", query.lower()):
+        chunk_kind = str(meta.get("chunk_kind", "")).lower()
+        chunk_index = meta.get("chunk_index")
+        if chunk_kind == "doc_summary" or (isinstance(chunk_index, int) and chunk_index < 2):
+            intro_boost = 0.55
+    targeted_lexical_boost = min(float(doc.get("_lexical_score", 0.0)) * 0.45, 0.95)
     return (
         doc.get("_vector_score", 0.0)
         + (coverage * 0.45)
@@ -467,7 +474,71 @@ def _hybrid_score(query: str, doc: dict) -> float:
         + table_boost
         + table_penalty
         + technology_boost
+        + intro_boost
+        + targeted_lexical_boost
     )
+
+
+def _target_lexical_score(query: str, doc: dict) -> float:
+    """Score exact lexical matches inside an explicitly targeted document."""
+    q_tokens = _tokenize(query)
+    if not q_tokens:
+        return 0.0
+
+    meta = doc.get("metadata", {})
+    title_text = f"{meta.get('section_title', '')} {meta.get('section_path', '')} {meta.get('question_text', '')}".lower()
+    body_text = (doc.get("page_content") or "").lower()
+    haystack = f"{title_text}\n{body_text}"
+
+    def token_forms(token: str) -> set[str]:
+        forms = {token}
+        if token == "eligibility":
+            forms.add("eligible")
+        elif token == "eligible":
+            forms.add("eligibility")
+        if token.endswith("ies") and len(token) > 4:
+            forms.add(token[:-3] + "y")
+        if token.endswith("s") and len(token) > 4:
+            forms.add(token[:-1])
+        return forms
+
+    def has_token(token: str, text: str) -> bool:
+        return any(
+            re.search(rf"(?<![a-z0-9]){re.escape(form)}(?![a-z0-9])", text)
+            for form in token_forms(token)
+        )
+
+    score = 0.0
+    token_hits = sum(1 for token in q_tokens if has_token(token, haystack))
+    if token_hits:
+        score += token_hits / max(len(q_tokens), 1)
+
+    for first, second in zip(q_tokens, q_tokens[1:]):
+        phrase = f"{first} {second}"
+        if phrase in title_text:
+            score += 1.3
+        elif phrase in body_text:
+            score += 0.7
+
+    high_signal_terms = {
+        "eligibility", "eligible", "criteria", "requirement", "requirements",
+        "service", "services", "officer", "officers", "casual", "earned",
+        "commuted", "paternity", "study",
+    }
+    for token in q_tokens:
+        if token in high_signal_terms and has_token(token, haystack):
+            score += 0.55
+
+    query_acronyms = {
+        token.lower()
+        for token in re.findall(r"\b[A-Z][A-Z0-9&/-]{1,7}\b", query)
+    }
+    for acronym in query_acronyms:
+        if re.search(rf"(?<![a-z0-9]){re.escape(acronym)}(?![a-z0-9])", title_text):
+            score += 1.0
+        elif re.search(rf"(?<![a-z0-9]){re.escape(acronym)}(?![a-z0-9])", body_text):
+            score += 0.5
+    return score
 
 
 def _apply_source_precision(query: str, docs: list[dict], top_k: int) -> list[dict]:
@@ -521,38 +592,26 @@ def _ensure_target_coverage(ranked_docs: list[dict], candidate_pool: list[dict],
     if len(targeted_docs) <= 1 or not candidate_pool:
         return ranked_docs
 
-    present = {
-        doc.get("metadata", {}).get("filename")
-        for doc in ranked_docs
-        if doc.get("metadata", {}).get("filename")
-    }
-    missing_targets = [target for target in targeted_docs if target not in present]
-    if not missing_targets:
-        return ranked_docs
-
-    additions = []
-    for target in missing_targets:
+    by_target: dict[str, list[dict]] = {}
+    for target in targeted_docs:
         target_candidates = [
             doc for doc in candidate_pool
             if doc.get("metadata", {}).get("filename") == target
         ]
+        target_candidates.sort(key=lambda doc: doc.get("_score", 0.0), reverse=True)
         if target_candidates:
-            additions.append(max(target_candidates, key=lambda doc: doc.get("_score", 0.0)))
+            by_target[target] = target_candidates
 
-    if not additions:
+    if not by_target:
         return ranked_docs
 
-    protected_by_file: dict[str, dict] = {}
-    combined = _dedupe_docs(ranked_docs + additions)
+    min_per_target = min(2, max(1, top_k // max(len(targeted_docs), 1)))
+    protected = []
     for target in targeted_docs:
-        target_docs = [
-            doc for doc in combined
-            if doc.get("metadata", {}).get("filename") == target
-        ]
-        if target_docs:
-            protected_by_file[target] = max(target_docs, key=lambda doc: doc.get("_score", 0.0))
+        protected.extend(by_target.get(target, [])[:min_per_target])
 
-    protected = list(protected_by_file.values())
+    combined = _dedupe_docs(protected + ranked_docs)
+    protected = _dedupe_docs(protected)
     protected_ids = {
         (
             doc.get("metadata", {}).get("filename"),
@@ -574,8 +633,8 @@ def _ensure_target_coverage(ranked_docs: list[dict], candidate_pool: list[dict],
 
 
 def _dedupe_docs(docs: list[dict]) -> list[dict]:
-    seen = set()
-    deduped = []
+    best_by_key: dict[tuple, dict] = {}
+    order = []
     for doc in docs:
         meta = doc.get("metadata", {})
         key = (
@@ -583,11 +642,24 @@ def _dedupe_docs(docs: list[dict]) -> list[dict]:
             meta.get("chunk_index"),
             doc.get("page_content", "")[:160],
         )
-        if key in seen:
+        if key not in best_by_key:
+            best_by_key[key] = doc
+            order.append(key)
             continue
-        seen.add(key)
-        deduped.append(doc)
-    return deduped
+        current = best_by_key[key]
+        current_rank = (
+            current.get("_lexical_score", 0.0),
+            current.get("_score", 0.0),
+            current.get("_vector_score", 0.0),
+        )
+        next_rank = (
+            doc.get("_lexical_score", 0.0),
+            doc.get("_score", 0.0),
+            doc.get("_vector_score", 0.0),
+        )
+        if next_rank > current_rank:
+            best_by_key[key] = doc
+    return [best_by_key[key] for key in order]
 
 
 def _format_retrieved_docs(final_docs: list[dict]) -> list[str]:
@@ -750,6 +822,45 @@ async def retrieve_documents(state: AgentState):
 
         return docs
 
+    async def fetch_target_lexical(doc_name: str):
+        """Recover exact sections in an explicitly targeted file when embedding rank misses them."""
+        try:
+            scan_limit = int(os.getenv("RAG_TARGET_LEXICAL_SCAN_LIMIT", "256"))
+            result = await asyncio.to_thread(
+                store.get_by_metadata,
+                where={"filename": {"$eq": doc_name}},
+                limit=scan_limit,
+            )
+        except Exception as e:
+            logger.debug(f"[RETRIEVER] Target lexical scan skipped for {doc_name}: {e}")
+            return []
+
+        matched_docs = []
+        lexical_queries = [query]
+        lexical_queries.extend(
+            re.sub(r"\s+", " ", (plan.get("query") or "")).strip()
+            for plan in query_plan
+            if plan.get("target") == doc_name and plan.get("query")
+        )
+        lexical_queries = [q for i, q in enumerate(lexical_queries) if q and q not in lexical_queries[:i]]
+        for content, meta in zip(result.get("documents") or [], result.get("metadatas") or []):
+            if len((content or "").strip()) < 40:
+                continue
+            candidate = {
+                "page_content": content,
+                "metadata": meta,
+                "_vector_score": 0.42,
+                "_query": query,
+            }
+            lexical_score = max(_target_lexical_score(lexical_query, candidate) for lexical_query in lexical_queries)
+            if lexical_score >= 1.0:
+                candidate["_vector_score"] = 0.58 if lexical_score >= 1.5 else 0.48
+                candidate["_lexical_score"] = lexical_score
+                matched_docs.append(candidate)
+
+        matched_docs.sort(key=lambda doc: (doc.get("_lexical_score", 0.0), _hybrid_score(query, doc)), reverse=True)
+        return matched_docs[: min(4, top_k)]
+
     async def run_vector_query(plan: dict):
         q = re.sub(r"\s+", " ", (plan.get("query") or query)).strip()
         target_file = plan.get("target")
@@ -847,6 +958,8 @@ async def retrieve_documents(state: AgentState):
     tasks = [run_vector_query(plan) for plan in query_plan]
     if targeted_docs and should_fetch_intro:
         tasks.extend(fetch_intro(doc) for doc in targeted_docs)
+    if targeted_docs:
+        tasks.extend(fetch_target_lexical(doc) for doc in targeted_docs)
 
     batches = await asyncio.gather(*tasks)
     metrics["vector_ms"] = max(vector_durations) if vector_durations else 0

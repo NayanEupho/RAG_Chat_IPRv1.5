@@ -77,8 +77,9 @@ def test_table_docs_are_compacted_for_generation():
 
     selected = prepare_docs_for_generation(docs, docs_budget=4096)
 
-    assert len(selected) == 2
-    assert all("Table Row:" in doc for doc in selected)
+    assert len(selected) == 3
+    assert selected[0].startswith("[Source: LeaveAtaGlance.pdf | Section: 11. Casual Leave")
+    assert selected[-1].endswith("summary")
     assert sum(len(doc) for doc in selected) < sum(len(doc) for doc in docs)
 
 

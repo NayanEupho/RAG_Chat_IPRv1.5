@@ -208,7 +208,7 @@ def _build_semantic_queries(query: str, targets: list[str] | None = None, max_va
 
     lower = base_query.lower()
     if any(term in lower for term in ["eligibility", "criteria", "eligible", "who can"]):
-        variants.append(f"{keyword_query or base_query} conditions requirements")
+        variants.append(f"{keyword_query or base_query} eligible services officers service requirements criteria")
     elif any(term in lower for term in ["summary", "summarize", "overview", "about"]):
         variants.append(f"{keyword_query or base_query} overview purpose scope summary")
     elif any(term in lower for term in ["benefit", "allowance", "entitlement"]):
@@ -493,7 +493,7 @@ async def planner_node(state: AgentState):
         forced_intent = "specific_doc_rag" if mentions else "direct_rag"
         logger.info(f"[PLANNER] Mode: Forced RAG / Mentions: {mentions}")
         retrieval_query = _target_correction_query(original_query, mentions, state) if _is_target_correction(original_query, mentions) else (cleaned_query or original_query)
-        semantic_queries = _build_semantic_queries(retrieval_query, mentions, max_variants=2 if len(mentions) > 1 else 3)
+        semantic_queries = _build_semantic_queries(retrieval_query, mentions, max_variants=3)
         return {
             "intent": forced_intent,
             "query": retrieval_query,

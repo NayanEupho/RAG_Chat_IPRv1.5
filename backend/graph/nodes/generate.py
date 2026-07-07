@@ -125,11 +125,11 @@ def _compact_table_doc(doc: str, max_chars: int = 1400) -> str:
 def prepare_docs_for_generation(docs: list, docs_budget: int) -> list:
     if not docs:
         return []
-    table_docs = [doc for doc in docs if _is_table_source(doc)]
-    if table_docs and len(table_docs) >= max(1, len(docs) // 2):
-        compacted = [_compact_table_doc(doc, max_chars=900) for doc in table_docs[:2]]
-        return select_docs_within_budget(compacted, min(docs_budget, 700))
-    return select_docs_within_budget(docs, docs_budget)
+    compacted_docs = [
+        _compact_table_doc(doc, max_chars=900) if _is_table_source(doc) else doc
+        for doc in docs
+    ]
+    return select_docs_within_budget(compacted_docs, docs_budget)
 
 
 def _summarize_messages_locally(prev_summary: str, dropped_messages: list, max_chars: int = 1800) -> str:
@@ -293,8 +293,17 @@ async def generate_answer(state: AgentState):
                 "The user explicitly asked for detail. Provide a complete structured answer with the relevant facts, "
                 "steps, exceptions, and citations from the retrieved evidence. Do not stay artificially brief.\n"
             )
+        multi_doc_instruction = ""
+        targeted_docs = state.get("targeted_docs") or []
+        if len(targeted_docs) > 1:
+            multi_doc_instruction = (
+                "\n[MULTI-DOCUMENT REQUIREMENT]\n"
+                f"The user targeted multiple documents: {', '.join(targeted_docs)}. Cover each targeted document "
+                "in a clearly labeled section before giving any combined comparison. If evidence for one target is thin, "
+                "state the specific evidence that was retrieved instead of ignoring that document.\n"
+            )
 
-        rag_prompt = f"""{targeting_context}{detail_instruction}
+        rag_prompt = f"""{targeting_context}{detail_instruction}{multi_doc_instruction}
 <docs>
 {context_block}
 </docs>

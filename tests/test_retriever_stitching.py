@@ -14,11 +14,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.graph.nodes.retriever import stitch_fragments
 from backend.graph.nodes.retriever import (
     _apply_source_precision,
+    _dedupe_docs,
     _effective_top_k,
     _ensure_target_coverage,
     _format_retrieved_docs,
     _hybrid_score,
     _query_variants,
+    _target_lexical_score,
 )
 
 class TestRetrieverStitching(unittest.TestCase):
@@ -142,6 +144,31 @@ class TestRetrieverStitching(unittest.TestCase):
             "What technologies does it use?", overview
         )
 
+    def test_hybrid_score_boosts_intro_for_about_query(self):
+        summary = {
+            "page_content": "QLoRA is an efficient finetuning approach for quantized large language models.",
+            "metadata": {
+                "filename": "Qlora_Paper.pdf",
+                "chunk_kind": "doc_summary",
+                "section_title": "Document Summary",
+                "chunk_index": 0,
+            },
+            "_vector_score": 0.42,
+        }
+        later_section = {
+            "page_content": "Guanaco qualitative evaluation benchmark examples and hyperparameters.",
+            "metadata": {
+                "filename": "Qlora_Paper.pdf",
+                "section_title": "6.1 Qualitative Analysis of Example Generations",
+                "chunk_index": 29,
+            },
+            "_vector_score": 0.72,
+        }
+
+        assert _hybrid_score("What is this paper about?", summary) > _hybrid_score(
+            "What is this paper about?", later_section
+        )
+
     def test_source_precision_prefers_relevant_table_file(self):
         leave_table = {
             "page_content": "Extra Ordinary Leave EOL medical certificate pension increment",
@@ -173,6 +200,83 @@ class TestRetrieverStitching(unittest.TestCase):
         assert filtered[0]["metadata"]["filename"] == "LeaveAtaGlance.pdf"
         assert all(d["metadata"]["filename"] == "LeaveAtaGlance.pdf" for d in filtered)
 
+    def test_target_lexical_score_recovers_exact_section_title(self):
+        casual_leave = {
+            "page_content": "Maximum of 08 days of casual leave is granted during a calendar year.",
+            "metadata": {
+                "filename": "LeaveAtaGlance.pdf",
+                "section_title": "Casual Leave (CL)",
+                "section_path": "IPR Leave Rules at a Glance > Types of Leave > Casual Leave (CL)",
+            },
+        }
+        paternity_leave = {
+            "page_content": "Paternity leave is granted for 15 days.",
+            "metadata": {
+                "filename": "LeaveAtaGlance.pdf",
+                "section_title": "Paternity Leave",
+                "section_path": "IPR Leave Rules at a Glance > Types of Leave > Paternity Leave",
+            },
+        }
+
+        assert _target_lexical_score("What does the document say about Casual Leave?", casual_leave) >= 1.5
+        assert _target_lexical_score("What does the document say about Casual Leave?", paternity_leave) < 1.0
+
+    def test_hybrid_score_uses_targeted_lexical_boost(self):
+        exact_section = {
+            "page_content": "Maximum of 08 days of casual leave is granted during a calendar year.",
+            "metadata": {
+                "filename": "LeaveAtaGlance.pdf",
+                "section_title": "Casual Leave (CL)",
+                "section_path": "IPR Leave Rules at a Glance > Types of Leave > Casual Leave (CL)",
+            },
+            "_vector_score": 0.48,
+            "_lexical_score": 1.8,
+        }
+        noisy_table = {
+            "page_content": "Paternity leave is granted for 15 days.",
+            "metadata": {
+                "filename": "LeaveAtaGlance.pdf",
+                "section_title": "Paternity Leave",
+                "section_path": "Table 3 > Paternity Leave",
+                "chunk_kind": "table_row",
+            },
+            "_vector_score": 0.82,
+        }
+
+        assert _hybrid_score("What does the document say about Casual Leave?", exact_section) > _hybrid_score(
+            "What does the document say about Casual Leave?", noisy_table
+        )
+
+    def test_target_lexical_score_matches_eligibility_to_eligible(self):
+        faq = {
+            "page_content": "Group A officers with at least 7 years of service are eligible.",
+            "metadata": {
+                "filename": "FAQ_LTDP_28Dec11.pdf",
+                "question_text": "Officers of which services are eligible for these programmes?",
+                "doc_type": "qna",
+            },
+        }
+
+        assert _target_lexical_score("eligibility criteria eligible services officers", faq) >= 1.5
+
+    def test_dedupe_keeps_lexically_stronger_duplicate(self):
+        vector_doc = {
+            "page_content": "Q: Officers of which services are eligible?",
+            "metadata": {"filename": "FAQ_LTDP_28Dec11.pdf", "chunk_index": 3},
+            "_vector_score": 0.62,
+        }
+        lexical_doc = {
+            "page_content": "Q: Officers of which services are eligible?",
+            "metadata": {"filename": "FAQ_LTDP_28Dec11.pdf", "chunk_index": 3},
+            "_vector_score": 0.48,
+            "_lexical_score": 2.4,
+        }
+
+        deduped = _dedupe_docs([vector_doc, lexical_doc])
+
+        assert len(deduped) == 1
+        assert deduped[0]["_lexical_score"] == 2.4
+
     def test_target_coverage_keeps_each_explicit_target_when_candidates_exist(self):
         ranked = [
             {
@@ -191,6 +295,11 @@ class TestRetrieverStitching(unittest.TestCase):
                 "page_content": "LTDP eligibility covers service criteria and salary protections.",
                 "metadata": {"filename": "FAQ_LTDP_28Dec11.pdf", "chunk_index": 3},
                 "_score": 0.57,
+            },
+            {
+                "page_content": "LTDP age limits and service requirements.",
+                "metadata": {"filename": "FAQ_LTDP_28Dec11.pdf", "chunk_index": 4},
+                "_score": 0.54,
             }
         ]
 
@@ -198,13 +307,12 @@ class TestRetrieverStitching(unittest.TestCase):
             ranked_docs=ranked,
             candidate_pool=candidates,
             targeted_docs=["FAQ_LTDP_28Dec11.pdf", "LeaveAtaGlance.pdf"],
-            top_k=2,
+            top_k=4,
         )
 
-        assert {doc["metadata"]["filename"] for doc in covered} == {
-            "FAQ_LTDP_28Dec11.pdf",
-            "LeaveAtaGlance.pdf",
-        }
+        files = [doc["metadata"]["filename"] for doc in covered]
+        assert files.count("FAQ_LTDP_28Dec11.pdf") >= 2
+        assert files.count("LeaveAtaGlance.pdf") >= 2
 
     def test_exact_acronym_title_beats_near_acronym_table_row(self):
         eol = {

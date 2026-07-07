@@ -203,7 +203,8 @@ SCENARIOS = [
                 query="What does @LeaveAtaGlance.pdf say about Casual Leave?",
                 expected_sources=["LeaveAtaGlance.pdf"],
                 expected_intents={"specific_doc_rag"},
-                required_terms=["Casual Leave"],
+                required_terms=["Casual Leave", "EL"],
+                forbidden_terms=["no information regarding Casual Leave", "do not contain any information regarding Casual Leave"],
             ),
             TurnSpec(
                 query="explain transformer attention architecture",
@@ -241,7 +242,7 @@ SCENARIOS = [
                 query="Compare @FAQ_LTDP_28Dec11.pdf and @LeaveAtaGlance.pdf on eligibility and leave-related rules.",
                 expected_sources=["FAQ_LTDP_28Dec11.pdf", "LeaveAtaGlance.pdf"],
                 expected_intents={"specific_doc_rag"},
-                required_terms=["eligibility", "leave"],
+                required_terms=["eligibility", "leave", "All India Services", "State Civil Services"],
                 notes="Multi-target query should retrieve both named documents.",
             ),
         ],
