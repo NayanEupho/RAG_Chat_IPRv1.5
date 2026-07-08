@@ -175,6 +175,20 @@ class TTFTTest:
                 print(f"    Timings: {' | '.join(parts)}")
         retrieval_metrics = result.get("retrieval_metrics") or {}
         if retrieval_metrics:
+            extra_parts = []
+            for key, label in [
+                ("vector_gather_ms", "gather"),
+                ("intro_ms", "intro"),
+                ("lexical_ms", "lex"),
+                ("postprocess_ms", "post"),
+                ("adjacent_ms", "adj"),
+            ]:
+                value = retrieval_metrics.get(key)
+                if value not in (None, 0):
+                    extra_parts.append(f"{label}={value}ms")
+            if retrieval_metrics.get("lexical_scan_used"):
+                extra_parts.append("lex_used=True")
+            extra = f" {' '.join(extra_parts)}" if extra_parts else ""
             print(
                 "    Retrieval: "
                 f"total={retrieval_metrics.get('total_ms', '?')}ms "
@@ -185,6 +199,7 @@ class TTFTTest:
                 f"candidates={retrieval_metrics.get('candidate_count', '?')} "
                 f"fallback={retrieval_metrics.get('fallback_used', False)} "
                 f"reason={retrieval_metrics.get('reason')}"
+                f"{extra}"
             )
         if result["source_items"]:
             print(f"    Sources: {', '.join(source_filenames(result['source_items'])[:5])}")

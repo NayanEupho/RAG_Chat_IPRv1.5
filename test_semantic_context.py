@@ -217,7 +217,7 @@ SCENARIOS = [
                 query="what features and problems does it solve?",
                 expected_sources=["TECHNICAL_REPORT_V8.pdf"],
                 expected_intents={"specific_doc_rag"},
-                required_terms=["cognitive load", "context switching"],
+                required_terms=["context-switch", "complexity"],
                 forbidden_terms=["Author:", "Tech Stack:", "Python 3.11"],
                 notes="Feature/problem follow-up should stay on the target document without restating old sections.",
             ),

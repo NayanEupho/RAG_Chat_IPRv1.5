@@ -537,6 +537,83 @@ def _target_lexical_score(query: str, doc: dict) -> float:
     return score
 
 
+def _query_coverage(query: str, docs: list[dict], limit: int = 5) -> float:
+    """Return how much content-bearing query vocabulary appears in the top docs."""
+    tokens = [token for token in _tokenize(query) if len(token) >= 5]
+    if not tokens:
+        return 1.0
+
+    haystack = "\n".join(
+        f"{doc.get('metadata', {}).get('section_title', '')} "
+        f"{doc.get('metadata', {}).get('section_path', '')} "
+        f"{doc.get('metadata', {}).get('question_text', '')} "
+        f"{doc.get('page_content', '')}"
+        for doc in docs[:limit]
+    ).lower()
+    if not haystack:
+        return 0.0
+    hits = sum(1 for token in tokens if token in haystack)
+    return hits / max(len(tokens), 1)
+
+
+def _should_run_target_lexical_scan(query: str, candidates: list[dict], top_k: int, min_score: float) -> bool:
+    """Run the expensive per-file lexical scan only when initial retrieval is weak."""
+    if not candidates:
+        return True
+
+    best_score = max(float(doc.get("_score", 0.0)) for doc in candidates)
+    if best_score < min_score:
+        return True
+
+    coverage = _query_coverage(query, candidates, limit=max(top_k, 3))
+    detail_terms = {
+        "author", "authors", "affiliation", "affiliations", "title", "abstract",
+        "eligibility", "eligible", "criteria", "benefit", "benefits", "feature",
+        "features", "problem", "problems", "limitation", "limitations", "methodology",
+        "results", "conclusion", "conclusions", "future", "caveat", "caveats",
+        "gotcha", "gotchas", "catch", "catches",
+    }
+    asks_for_specific_detail = bool(set(_tokenize(query)) & detail_terms)
+
+    if asks_for_specific_detail and coverage < 0.35:
+        return True
+    if len(candidates) < min(top_k, 3) and coverage < 0.5:
+        return True
+    return False
+
+
+def _should_fetch_intro_context(query: str, candidates: list[dict], min_score: float) -> bool:
+    """Fetch intro/summary chunks lazily only when vector results do not already cover the request."""
+    if not candidates:
+        return True
+
+    best_score = max(float(doc.get("_score", 0.0)) for doc in candidates)
+    if best_score < min_score:
+        return True
+
+    lower = query.lower()
+    asks_intro = bool(re.search(r"\b(about|overview|purpose|scope|summari[sz]e|summary)\b", lower))
+    asks_identity = bool(re.search(r"\b(author|authors|affiliation|affiliations|title|abstract)\b", lower))
+    if not asks_intro and not asks_identity:
+        return False
+
+    has_intro_candidate = any(
+        doc.get("metadata", {}).get("chunk_kind") == "doc_summary"
+        or (
+            isinstance(doc.get("metadata", {}).get("chunk_index"), int)
+            and doc.get("metadata", {}).get("chunk_index") < 2
+        )
+        for doc in candidates[:5]
+    )
+    coverage = _query_coverage(query, candidates, limit=5)
+
+    if asks_identity and coverage < 0.35:
+        return True
+    if asks_intro and not has_intro_candidate and coverage < 0.50:
+        return True
+    return False
+
+
 def _apply_source_precision(query: str, docs: list[dict], top_k: int) -> list[dict]:
     """
     Reduce source contamination after hybrid ranking.
@@ -747,6 +824,13 @@ async def retrieve_documents(state: AgentState):
         "readiness_ms": readiness_ms,
         "embedding_ms": 0,
         "vector_ms": 0,
+        "vector_gather_ms": 0,
+        "intro_ms": 0,
+        "lexical_ms": 0,
+        "lexical_scan_used": False,
+        "fallback_ms": 0,
+        "postprocess_ms": 0,
+        "adjacent_ms": 0,
         "search_ms": 0,
         "fallback_used": False,
         "candidate_count": 0,
@@ -778,9 +862,10 @@ async def retrieve_documents(state: AgentState):
     should_fetch_intro = any(term in query.lower() for term in intro_terms)
 
     async def fetch_intro(doc_name: str):
+        intro_start = time.monotonic()
         try:
             intro_where = {"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 2}}]}
-            intro_results = store.get_by_metadata(where=intro_where, limit=2)
+            intro_results = await asyncio.to_thread(store.get_by_metadata, where=intro_where, limit=2)
             return [
                 {"page_content": c, "metadata": intro_results['metadatas'][i], "_vector_score": 0.35}
                 for i, c in enumerate(intro_results.get('documents') or [])
@@ -788,12 +873,16 @@ async def retrieve_documents(state: AgentState):
         except Exception as e:
             logger.debug(f"[RETRIEVER] Intro fetch skipped: {e}")
             return []
+        finally:
+            metrics["intro_ms"] += int((time.monotonic() - intro_start) * 1000)
 
     async def fetch_target_fallback(doc_name: str):
         """Guarantee targeted files contribute context when vector scores are weak."""
+        fallback_start = time.monotonic()
         docs = []
         try:
-            summary_results = store.get_by_metadata(
+            summary_results = await asyncio.to_thread(
+                store.get_by_metadata,
                 where={"$and": [{"filename": {"$eq": doc_name}}, {"chunk_kind": {"$eq": "doc_summary"}}]},
                 limit=1,
             )
@@ -805,7 +894,8 @@ async def retrieve_documents(state: AgentState):
             logger.debug(f"[RETRIEVER] Summary fallback skipped for {doc_name}: {e}")
 
         try:
-            intro_results = store.get_by_metadata(
+            intro_results = await asyncio.to_thread(
+                store.get_by_metadata,
                 where={"$and": [{"filename": {"$eq": doc_name}}, {"chunk_index": {"$lt": 3}}]},
                 limit=3,
             )
@@ -816,10 +906,12 @@ async def retrieve_documents(state: AgentState):
         except Exception as e:
             logger.debug(f"[RETRIEVER] Intro fallback skipped for {doc_name}: {e}")
 
+        metrics["fallback_ms"] += int((time.monotonic() - fallback_start) * 1000)
         return docs
 
     async def fetch_target_lexical(doc_name: str):
         """Recover exact sections in an explicitly targeted file when embedding rank misses them."""
+        lexical_start = time.monotonic()
         try:
             scan_limit = int(os.getenv("RAG_TARGET_LEXICAL_SCAN_LIMIT", "256"))
             result = await asyncio.to_thread(
@@ -830,6 +922,8 @@ async def retrieve_documents(state: AgentState):
         except Exception as e:
             logger.debug(f"[RETRIEVER] Target lexical scan skipped for {doc_name}: {e}")
             return []
+        finally:
+            metrics["lexical_ms"] += int((time.monotonic() - lexical_start) * 1000)
 
         matched_docs = []
         lexical_queries = [query]
@@ -952,19 +1046,36 @@ async def retrieve_documents(state: AgentState):
         return adjacent
 
     tasks = [run_vector_query(plan) for plan in query_plan]
-    if targeted_docs and should_fetch_intro:
-        tasks.extend(fetch_intro(doc) for doc in targeted_docs)
-    if targeted_docs:
-        tasks.extend(fetch_target_lexical(doc) for doc in targeted_docs)
 
+    vector_gather_start = time.monotonic()
     batches = await asyncio.gather(*tasks)
+    metrics["vector_gather_ms"] = int((time.monotonic() - vector_gather_start) * 1000)
     metrics["vector_ms"] = max(vector_durations) if vector_durations else 0
     metrics["vector_total_ms"] = sum(vector_durations)
+    postprocess_start = time.monotonic()
     candidates = _dedupe_docs([doc for batch in batches for doc in batch])
     for doc in candidates:
         doc["_score"] = _hybrid_score(query, doc)
     candidates.sort(key=lambda d: d.get("_score", 0.0), reverse=True)
     min_score = float(os.getenv("RAG_HYBRID_MIN_SCORE_TARGETED" if has_targets else "RAG_HYBRID_MIN_SCORE", "0.20" if has_targets else "0.42"))
+
+    if targeted_docs and should_fetch_intro and _should_fetch_intro_context(query, candidates, min_score):
+        intro_batches = await asyncio.gather(*(fetch_intro(doc) for doc in targeted_docs))
+        if intro_batches:
+            candidates = _dedupe_docs([*candidates, *(doc for batch in intro_batches for doc in batch)])
+            for doc in candidates:
+                doc["_score"] = _hybrid_score(query, doc)
+            candidates.sort(key=lambda d: d.get("_score", 0.0), reverse=True)
+
+    if targeted_docs and _should_run_target_lexical_scan(query, candidates, top_k, min_score):
+        metrics["lexical_scan_used"] = True
+        lexical_batches = await asyncio.gather(*(fetch_target_lexical(doc) for doc in targeted_docs))
+        if lexical_batches:
+            candidates = _dedupe_docs([*candidates, *(doc for batch in lexical_batches for doc in batch)])
+            for doc in candidates:
+                doc["_score"] = _hybrid_score(query, doc)
+            candidates.sort(key=lambda d: d.get("_score", 0.0), reverse=True)
+
     if candidates and candidates[0].get("_score", 0.0) < min_score:
         logger.info(f"[RETRIEVER] No strong evidence: best hybrid score {candidates[0].get('_score', 0.0):.3f} < {min_score}")
         if has_targets:
@@ -985,6 +1096,7 @@ async def retrieve_documents(state: AgentState):
 
     metrics["candidate_count"] = len(candidates)
     candidates = candidates[:pool_limit]
+    metrics["postprocess_ms"] = int((time.monotonic() - postprocess_start) * 1000)
 
     search_ms = int((time.monotonic() - search_start) * 1000)
     metrics["search_ms"] = search_ms
@@ -999,7 +1111,9 @@ async def retrieve_documents(state: AgentState):
         logger.info(f"[RETRIEVER] Cross-encoder reranked {rerank_cap} docs in {rerank_ms}ms.")
     else:
         ranked_docs = candidates[:top_k]
+    adjacent_start = time.monotonic()
     adjacent_docs = await fetch_adjacent_context(ranked_docs)
+    metrics["adjacent_ms"] = int((time.monotonic() - adjacent_start) * 1000)
     if adjacent_docs:
         for doc in adjacent_docs:
             doc["_score"] = _hybrid_score(query, doc)

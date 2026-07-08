@@ -20,6 +20,8 @@ from backend.graph.nodes.retriever import (
     _format_retrieved_docs,
     _hybrid_score,
     _query_variants,
+    _should_fetch_intro_context,
+    _should_run_target_lexical_scan,
     _target_lexical_score,
 )
 
@@ -276,6 +278,42 @@ class TestRetrieverStitching(unittest.TestCase):
 
         assert len(deduped) == 1
         assert deduped[0]["_lexical_score"] == 2.4
+
+    def test_target_lexical_scan_skips_when_vector_candidates_are_strong(self):
+        candidates = [{
+            "page_content": "The authors are Tim Dettmers and colleagues.",
+            "metadata": {"section_title": "Authors", "filename": "paper.pdf"},
+            "_score": 0.88,
+        }]
+
+        assert not _should_run_target_lexical_scan("who are the authors", candidates, top_k=5, min_score=0.20)
+
+    def test_target_lexical_scan_runs_when_candidates_do_not_cover_detail_query(self):
+        candidates = [{
+            "page_content": "This paper discusses memory efficient finetuning.",
+            "metadata": {"section_title": "Overview", "filename": "paper.pdf"},
+            "_score": 0.72,
+        }]
+
+        assert _should_run_target_lexical_scan("who are the authors", candidates, top_k=5, min_score=0.20)
+
+    def test_intro_fetch_skips_when_vector_candidates_cover_overview(self):
+        candidates = [{
+            "page_content": "The technical report describes a DevOps Agent for infrastructure orchestration.",
+            "metadata": {"filename": "report.pdf", "section_title": "Executive Summary"},
+            "_score": 0.82,
+        }]
+
+        assert not _should_fetch_intro_context("what is the technical report about", candidates, min_score=0.20)
+
+    def test_intro_fetch_runs_when_overview_candidates_are_weak(self):
+        candidates = [{
+            "page_content": "Appendix references and unrelated deployment notes.",
+            "metadata": {"filename": "report.pdf", "section_title": "Appendix"},
+            "_score": 0.12,
+        }]
+
+        assert _should_fetch_intro_context("what is the technical report about", candidates, min_score=0.20)
 
     def test_target_coverage_keeps_each_explicit_target_when_candidates_exist(self):
         ranked = [
