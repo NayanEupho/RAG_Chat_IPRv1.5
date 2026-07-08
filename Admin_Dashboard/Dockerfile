@@ -27,7 +27,7 @@ ENV PORT=3001
 ENV HOSTNAME=0.0.0.0
 # Backend upstream used by /api/admin-backend/[...path].
 # Override this in compose/deployment if the backend service has a different name.
-ENV ADMIN_BACKEND_UPSTREAM=http://Askme-admin-backend:8000
+ENV ADMIN_BACKEND_UPSTREAM=http://agent-backend-prod:8000
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
