@@ -21,6 +21,8 @@ interface StagedDocumentConfig {
 }
 
 type ConfigScope = "all" | "custom";
+const ACCEPTED_EXTENSIONS = /\.(pdf|docx|txt|md|markdown|pptx|xlsx|html)$/i;
+const ACCEPT_ATTRIBUTE = ".pdf,.docx,.txt,.md,.markdown,.pptx,.xlsx,.html";
 type BatchTab = "draft" | "processing" | "completed";
 
 interface BatchConfigPayload {
@@ -352,7 +354,14 @@ export default function IngestionPage() {
   }
 
   function updateFiles(next: FileList | null) {
-    const accepted = Array.from(next || []).filter((file) => /\.(pdf|docx)$/i.test(file.name));
+    const selected = Array.from(next || []);
+    const accepted = selected.filter((file) => ACCEPTED_EXTENSIONS.test(file.name));
+    const rejected = selected.filter((file) => !ACCEPTED_EXTENSIONS.test(file.name));
+    if (rejected.length) {
+      setError(`Unsupported file type: ${rejected.map((file) => file.name).join(", ")}`);
+    } else {
+      setError(null);
+    }
     setFiles(accepted);
     setDocumentConfigs((current) => {
       const nextConfigs: Record<string, StagedDocumentConfig> = {};
@@ -434,7 +443,7 @@ export default function IngestionPage() {
 
   async function createBatch(submit: boolean) {
     if (!name.trim() || files.length === 0) {
-      setError("Batch name and at least one PDF/DOCX file are required.");
+      setError("Batch name and at least one supported document are required.");
       return;
     }
     setSaving(submit ? "submit" : "draft");
@@ -444,12 +453,8 @@ export default function IngestionPage() {
       form.append("batch_name", name.trim());
       form.append("parser", parser);
       form.append("ingestion_type", batchIngestionType);
-      const perDocumentConfigs = files.map((file) => documentConfigs[fileKey(file)] || {
-        ingestion_type: batchIngestionType,
-        parser,
-        normalization_enabled: normalization,
-        review_required: reviewRequired
-      });
+      const defaults = currentDefaultConfig();
+      const perDocumentConfigs = files.map((file) => (configScope === "all" ? defaults : documentConfigs[fileKey(file)] || defaults));
       form.append("document_configs_json", JSON.stringify(perDocumentConfigs));
       form.append("document_types_json", JSON.stringify(perDocumentConfigs.map((config) => config.ingestion_type)));
       form.append("normalization_enabled", String(normalization));
@@ -518,11 +523,11 @@ export default function IngestionPage() {
 
               <label className="dropzone">
               <span>
-                <strong>Drop PDF/DOCX files here</strong>
+                <strong>Drop supported documents here</strong>
                 <br />
                 <span className="muted">Files remain local until you save or start the batch.</span>
               </span>
-              <input type="file" multiple accept=".pdf,.docx" onChange={(event) => updateFiles(event.target.files)} hidden />
+              <input type="file" multiple accept={ACCEPT_ATTRIBUTE} onChange={(event) => updateFiles(event.target.files)} hidden />
             </label>
 
             <div className="grid cols-3">

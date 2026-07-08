@@ -456,6 +456,68 @@ def test_worker_fails_chunk_job_when_no_chunks_are_produced(isolated_admin, monk
     assert repo.list_chunks(document_id=document["document_id"])["total"] == 0
 
 
+def test_worker_chunks_approved_markdown_without_document_processor(isolated_admin, monkeypatch):
+    from backend.admin import worker as worker_module
+    from backend.admin.worker import AdminWorker
+    from backend.ingestion.processor import DocumentProcessor
+    from backend.rag import store as store_module
+
+    class FakeStore:
+        def __init__(self):
+            self.deleted = []
+            self.added = []
+
+        def delete_document(self, document_id):
+            self.deleted.append(document_id)
+
+        def add_documents(self, texts, metadatas, ids, embeddings):
+            self.added.append({"texts": texts, "metadatas": metadatas, "ids": ids, "embeddings": embeddings})
+
+    class FakeClient:
+        def embed(self, *, model, input):
+            return {"embeddings": [[0.1, 0.2] for _ in input]}
+
+    store = FakeStore()
+    document = _create_document(isolated_admin, batch_id="batch_markdown_chunk", document_id="doc_markdown_chunk")
+    repo.submit_batch(document["batch_id"])
+    variant = repo.create_parse_variant(document_id=document["document_id"], parser_type="docling")
+    parsed_path = isolated_admin / "generated_doc_md" / "parsed.md"
+    approved_path = isolated_admin / "generated_doc_md" / "approved.md"
+    parsed_path.parent.mkdir(parents=True, exist_ok=True)
+    parsed_path.write_text("# Parsed\n\nBody", encoding="utf-8")
+    approved_path.write_text("# Approved\n\n## Section\n\nThis approved markdown has enough text to produce a retrieval chunk.", encoding="utf-8")
+    repo.update_parse_variant(variant["variant_id"], status=VariantStatus.COMPLETE.value, parsed_md_path=str(parsed_path), raw_md_path=str(parsed_path))
+    repo.create_or_update_review(
+        document_id=document["document_id"],
+        selected_parse_variant_id=variant["variant_id"],
+        selected_norm_variant_id=None,
+        base_md_path=str(parsed_path),
+        status="APPROVED",
+    )
+    repo.update_review(document["document_id"], review_approved_md_path=str(approved_path))
+    repo.set_document_status(document["document_id"], DocumentStatus.CHUNK_PENDING.value)
+    job = repo.create_job(
+        job_type="chunk",
+        stage=PipelineStage.CHUNK.value,
+        batch_id=document["batch_id"],
+        document_id=document["document_id"],
+        payload={"document_id": document["document_id"]},
+    )
+
+    monkeypatch.setattr(store_module, "get_vector_store", lambda: store)
+    monkeypatch.setattr(worker_module, "get_embed_client", lambda _host: FakeClient())
+    monkeypatch.setattr(DocumentProcessor, "__init__", lambda self: (_ for _ in ()).throw(AssertionError("DocumentProcessor should not be initialized for markdown chunking")))
+
+    AdminWorker()._chunk(job["job_id"], job)
+
+    indexed = repo.get_document(document["document_id"])
+    assert indexed["status"] == DocumentStatus.INDEXED.value
+    assert indexed["chunk_count"] > 0
+    assert store.deleted == [document["document_id"]]
+    assert store.added
+    assert repo.list_chunks(document_id=document["document_id"])["total"] == indexed["chunk_count"]
+
+
 def test_vector_stats_detail_reports_mirror_and_chroma_counts(monkeypatch):
     from backend.admin import vector_inspector
     from backend.rag import store as store_module
@@ -1271,6 +1333,22 @@ def test_repository_log_publishes_sse_log_event(isolated_admin):
     assert event["type"] == "log"
     assert event["data"]["log_id"] == log["log_id"]
     assert event["data"]["message"] == "Started parse"
+
+
+def test_event_hub_bounds_slow_subscriber_queue(monkeypatch):
+    from backend.admin.events import AdminEventHub
+
+    monkeypatch.setenv("ADMIN_EVENT_QUEUE_SIZE", "10")
+    hub = AdminEventHub()
+    subscriber = hub.subscribe()
+
+    for seq in range(12):
+        hub.publish({"type": "log", "seq": seq})
+
+    assert subscriber.qsize() == 10
+    assert subscriber.get_nowait()["seq"] == 2
+    assert subscriber.get_nowait()["seq"] == 3
+    hub.unsubscribe(subscriber)
 
 
 def test_review_content_endpoint_returns_parsed_normalized_and_editable_sources(isolated_admin):

@@ -15,6 +15,25 @@ from backend.admin.repository import now_iso, repo
 from backend.admin.schemas import BatchStatus, DocumentStatus, JobStatus, PipelineStage, VariantStatus
 
 
+_EMBED_CLIENTS: dict[str, Any] = {}
+_EMBED_CLIENT_LOCK = threading.Lock()
+
+
+def get_embed_client(host: str) -> Any:
+    import httpx
+    import ollama
+
+    with _EMBED_CLIENT_LOCK:
+        client = _EMBED_CLIENTS.get(host)
+        if client is None:
+            client = ollama.Client(
+                host=host,
+                timeout=httpx.Timeout(connect=10.0, read=float(os.getenv("ADMIN_EMBED_READ_TIMEOUT_SECONDS", "120")), write=30.0, pool=5.0),
+            )
+            _EMBED_CLIENTS[host] = client
+        return client
+
+
 def embed_text_batches(client: Any, model: str, texts: list[str], batch_size: int = 50) -> list[list[float]]:
     embeddings: list[list[float]] = []
     for index in range(0, len(texts), batch_size):
@@ -467,10 +486,8 @@ class AdminWorker:
             self._publish_document(document["document_id"])
 
     def _chunk(self, job_id: str, job: dict[str, Any]) -> None:
-        import ollama
-
         from backend.config import get_config
-        from backend.ingestion.processor import DocumentProcessor
+        from backend.ingestion.chunkers.markdown import chunk_markdown_file
         from backend.rag.store import get_vector_store
 
         document = repo.get_document(job["document_id"])
@@ -487,9 +504,13 @@ class AdminWorker:
             store = get_vector_store()
             if hasattr(store, "delete_document"):
                 store.delete_document(document["document_id"])
-            processor = DocumentProcessor()
             doc_type = document["effective_config"].get("ingestion_type", "general")
-            chunks = processor.process_file(review["review_approved_md_path"], mode="markdown", llm_normalize=False, doc_type=doc_type)
+            chunks = chunk_markdown_file(
+                review["review_approved_md_path"],
+                filename=document["original_filename"],
+                doc_type=doc_type,
+                source_type="markdown",
+            )
             if not chunks:
                 raise ValueError("Chunking produced zero chunks; document was not indexed")
             reviewed_md_name = Path(review["review_approved_md_path"]).name
@@ -504,7 +525,7 @@ class AdminWorker:
             config = get_config()
             if not config.embedding_model:
                 raise ValueError("Embedding Model not configured")
-            client = ollama.Client(host=config.embedding_model.host)
+            client = get_embed_client(config.embedding_model.host)
             embedding_model = config.embedding_model.model_name
             embeddings = embed_text_batches(client, embedding_model, texts)
             if len(embeddings) != len(texts):

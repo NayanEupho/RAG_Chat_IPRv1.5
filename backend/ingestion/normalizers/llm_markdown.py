@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
@@ -9,6 +10,8 @@ import ollama
 from backend.config import OllamaConfig, get_config
 
 logger = logging.getLogger("rag_chat_ipr.ingestion.normalizers")
+_CLIENT_CACHE: dict[tuple[int, str], Any] = {}
+_CLIENT_CACHE_LOCK = threading.Lock()
 
 
 GENERAL_NORMALIZATION_RULES = """You are a document normalization engine.
@@ -119,7 +122,7 @@ class LlmMarkdownNormalizer:
         batch_manifests = []
         previous_tail = ""
 
-        client = self.client_factory(host=normalization_model.host)
+        client = self._client_for_host(normalization_model.host)
         rules = QNA_NORMALIZATION_RULES if doc_type == "qna" else GENERAL_NORMALIZATION_RULES
 
         for idx, batch_text in enumerate(batches, start=1):
@@ -190,6 +193,15 @@ class LlmMarkdownNormalizer:
                 raise ValueError("LLM normalization model config must include endpoint and model_id")
             return OllamaConfig(host=str(host), model_name=str(model_name))
         return cfg.normalization_model or cfg.main_model
+
+    def _client_for_host(self, host: str) -> Any:
+        key = (id(self.client_factory), host)
+        with _CLIENT_CACHE_LOCK:
+            client = _CLIENT_CACHE.get(key)
+            if client is None:
+                client = self.client_factory(host=host)
+                _CLIENT_CACHE[key] = client
+            return client
 
     def _batch_prompt(
         self,

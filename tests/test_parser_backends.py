@@ -107,3 +107,51 @@ def test_docling_parser_backend_can_feed_section_chunking(tmp_path, monkeypatch)
     assert chunks
     assert chunks[0]["metadata"]["parser"] == "docling"
     assert any("Method" in chunk["text"] for chunk in chunks)
+
+
+def test_auto_parser_skips_vlm_when_not_configured(tmp_path, monkeypatch):
+    from backend.ingestion import parsers
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    attempted = []
+
+    def fake_parse_with_mode(**kwargs):
+        attempted.append(kwargs["mode"])
+        raise RuntimeError(f"{kwargs['mode']} failed")
+
+    monkeypatch.setattr(parsers, "get_config", lambda: SimpleNamespace(vlm_model="false"))
+    monkeypatch.setattr(parsers, "_parse_pdf_with_mode", fake_parse_with_mode)
+
+    with patch("backend.ingestion.parsers.logger"):
+        try:
+            parsers._parse_pdf_auto(
+                str(pdf_path),
+                "general",
+                converter_factory=MagicMock(),
+                scanned_detector=lambda _path: False,
+                clean_markdown=lambda text: text,
+                fix_header_hierarchy=lambda text: text,
+            )
+        except RuntimeError:
+            pass
+
+    assert attempted == ["docling", "pymupdf4llm", "pymupdf"]
+
+
+def test_explicit_vlm_parser_fails_fast_when_not_configured(tmp_path, monkeypatch):
+    from backend.ingestion import parsers
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(parsers, "get_config", lambda: SimpleNamespace(vlm_model="false"))
+
+    with patch("backend.ingestion.parsers.VisionMarkdownParser") as parser_cls:
+        try:
+            parsers._parse_vision(str(pdf_path), "general")
+        except ValueError as exc:
+            assert "RAG_VLM_MODEL" in str(exc)
+        else:
+            raise AssertionError("Expected VLM parser to fail when model is not configured")
+
+    parser_cls.assert_not_called()

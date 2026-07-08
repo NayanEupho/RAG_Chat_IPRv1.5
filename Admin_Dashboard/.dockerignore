@@ -1,0 +1,11 @@
+node_modules
+.next
+admin_data
+__pycache__
+*.log
+dev_stdout.log
+dev_stderr.log
+tsconfig.tsbuildinfo
+.env
+.env.*
+frontend_visual_refernce

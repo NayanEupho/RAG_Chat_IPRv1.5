@@ -51,6 +51,7 @@ from backend.ingestion.parsers import normalize_parser_mode, is_supported_parser
 router = APIRouter()
 _MODEL_HEALTH_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _MODEL_HEALTH_LOCK = threading.Lock()
+_MODEL_HEALTH_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-model-health")
 
 
 def ok(data):
@@ -330,8 +331,7 @@ def runtime_config():
         ("VLM model (vision/OCR)", vlm_model, cfg.vlm_engine, bool(vlm_model)),
         ("LLM normalization model", normalization_model, cfg.normalization_engine, None),
     ]
-    with ThreadPoolExecutor(max_workers=len(model_specs)) as executor:
-        models = list(executor.map(lambda item: model_row(*item), model_specs))
+    models = list(_MODEL_HEALTH_EXECUTOR.map(lambda item: model_row(*item), model_specs))
 
     return ok(
         {
@@ -1027,14 +1027,20 @@ async def events():
     subscriber = event_hub.subscribe()
 
     async def generator():
+        last_ping = time.monotonic()
         try:
             yield ": admin events connected\n\n"
             while True:
                 try:
-                    event = await asyncio.to_thread(subscriber.get, True, 30)
+                    event = subscriber.get_nowait()
                     yield event_hub.sse_frame(event)
                 except queue.Empty:
-                    yield event_hub.sse_frame({"type": "ping"})
+                    await asyncio.sleep(0.5)
+                    if time.monotonic() - last_ping >= 30:
+                        last_ping = time.monotonic()
+                        yield event_hub.sse_frame({"type": "ping"})
+        except asyncio.CancelledError:
+            return
         finally:
             event_hub.unsubscribe(subscriber)
 

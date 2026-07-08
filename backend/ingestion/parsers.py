@@ -33,6 +33,11 @@ PARSER_ALIASES = {
 PDF_PARSERS = {"auto", "vision_llm", "docling", "docling_vision", "pymupdf", "pymupdf4llm"}
 
 
+def _vlm_configured() -> bool:
+    cfg = get_config()
+    return bool(cfg.vlm_model and str(cfg.vlm_model).lower() != "false")
+
+
 @dataclass
 class MarkdownParseResult:
     markdown: str
@@ -111,7 +116,11 @@ def _parse_pdf_auto(
     needs_ocr = scanned_detector(file_path)
     primary = "docling_vision" if needs_ocr else "docling"
 
-    for mode in [primary, "pymupdf4llm", "pymupdf", "vision_llm"]:
+    fallback_modes = [primary, "pymupdf4llm", "pymupdf"]
+    if _vlm_configured():
+        fallback_modes.append("vision_llm")
+
+    for mode in fallback_modes:
         if mode in chain:
             continue
         chain.append(mode)
@@ -182,6 +191,8 @@ def _parse_pdf_with_mode(
 
 def _parse_vision(file_path: str, doc_type: str) -> tuple[str, Dict[str, str]]:
     cfg = get_config()
+    if not cfg.vlm_model or str(cfg.vlm_model).lower() == "false":
+        raise ValueError("VLM parser requires RAG_VLM_MODEL to be configured")
     filename = os.path.basename(file_path)
     logger.info("[VISION_LLM] Parsing %s page-by-page with %s at %s", filename, cfg.vlm_model, cfg.vlm_host)
     parser = VisionMarkdownParser(

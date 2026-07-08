@@ -8,7 +8,7 @@ import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.ingestion.watcher import IngestionWorker
+from backend.ingestion.watcher import IngestionWorker, NewDocumentHandler
 
 
 class _FakeVectorStore:
@@ -31,7 +31,7 @@ class _FakeEmbeddingClient:
 
 
 @pytest.mark.asyncio
-async def test_watcher_defaults_auto_mode_to_docling_with_normalization(tmp_path):
+async def test_watcher_respects_auto_mode_and_normalization_config(tmp_path):
     doc = tmp_path / "upload_docs" / "General" / "sample.pdf"
     doc.parent.mkdir(parents=True)
     doc.write_text("placeholder", encoding="utf-8")
@@ -51,8 +51,8 @@ async def test_watcher_defaults_auto_mode_to_docling_with_normalization(tmp_path
 
     worker.processor.process_file.assert_called_once_with(
         str(doc),
-        mode="docling",
-        llm_normalize=True,
+        mode="auto",
+        llm_normalize=False,
     )
 
 
@@ -145,3 +145,33 @@ async def test_watcher_fails_when_embedding_count_mismatches(tmp_path):
             await worker._embed_and_store(chunks)
 
     assert store.calls == []
+
+
+def test_watcher_handler_debounces_duplicate_modified_events(tmp_path):
+    task_queue = queue.Queue()
+    handler = NewDocumentHandler(task_queue)
+    doc = tmp_path / "upload_docs" / "General" / "sample.pdf"
+    doc.parent.mkdir(parents=True)
+    doc.write_bytes(b"%PDF-1.4\n")
+    event = SimpleNamespace(src_path=str(doc))
+
+    handler.on_modified(event)
+    handler.on_modified(event)
+    handler.on_modified(event)
+
+    assert task_queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_watcher_waits_for_stable_non_empty_file(tmp_path, monkeypatch):
+    doc = tmp_path / "sample.pdf"
+    doc.write_bytes(b"%PDF-1.4\n")
+    with patch("backend.ingestion.watcher.get_vector_store", return_value=MagicMock()):
+        worker = IngestionWorker(queue.Queue())
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("backend.ingestion.watcher.asyncio.sleep", fake_sleep)
+
+    assert await worker._wait_until_file_stable(str(doc), attempts=4, interval=0) is True

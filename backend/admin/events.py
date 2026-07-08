@@ -3,7 +3,15 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import os
 from typing import Any
+
+
+def _subscriber_queue_size() -> int:
+    try:
+        return max(10, int(os.getenv("ADMIN_EVENT_QUEUE_SIZE", "500")))
+    except ValueError:
+        return 500
 
 
 class AdminEventHub:
@@ -12,7 +20,7 @@ class AdminEventHub:
         self._subscribers: list[queue.Queue[dict[str, Any]]] = []
 
     def subscribe(self) -> queue.Queue[dict[str, Any]]:
-        subscriber: queue.Queue[dict[str, Any]] = queue.Queue()
+        subscriber: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=_subscriber_queue_size())
         with self._lock:
             self._subscribers.append(subscriber)
         return subscriber
@@ -28,7 +36,13 @@ class AdminEventHub:
             try:
                 subscriber.put_nowait(event)
             except queue.Full:
-                pass
+                try:
+                    subscriber.get_nowait()
+                    subscriber.put_nowait(event)
+                except queue.Empty:
+                    pass
+                except queue.Full:
+                    pass
 
     def sse_frame(self, event: dict[str, Any]) -> str:
         event_type = str(event.get("type", "message"))
@@ -36,4 +50,3 @@ class AdminEventHub:
 
 
 event_hub = AdminEventHub()
-

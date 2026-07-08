@@ -94,7 +94,7 @@ function scheduleReconnect(reason: string) {
       lastError: `SSE reconnect timed out. Retrying in the background. Confirm ${adminEventsUrl()} is reachable if this persists.`
     });
   }, 30000);
-  const delay = Math.min(12000, 750 * 2 ** Math.min(reconnectAttempt, 4)) + Math.floor(Math.random() * 300);
+  const delay = Math.min(60000, 750 * 2 ** Math.min(reconnectAttempt, 6)) + Math.floor(Math.random() * 1000);
   reconnectAttempt += 1;
   reconnectTimer = window.setTimeout(connectSharedEvents, delay);
 }
