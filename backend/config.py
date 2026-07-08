@@ -104,16 +104,20 @@ class AppConfig(BaseModel):
 # Singleton instance
 _runtime_config = AppConfig()
 _dotenv_loaded = False
+_env_applied = False
 _dotenv_lock = threading.Lock()
 
 def get_config() -> AppConfig:
     # Load .env file if present (supports uvicorn workers that may not inherit shell env vars)
-    global _dotenv_loaded
+    global _dotenv_loaded, _env_applied
     if not _dotenv_loaded:
         with _dotenv_lock:
             if not _dotenv_loaded:
                 load_dotenv()
                 _dotenv_loaded = True
+    if _env_applied:
+        return _runtime_config
+
     # If not configured in memory, check env vars (in case of uvicorn worker)
     if not _runtime_config.is_configured:
         main_host = os.getenv("RAG_MAIN_HOST")
@@ -147,8 +151,6 @@ def get_config() -> AppConfig:
     if saml_login_env:
         _runtime_config.use_saml_login = saml_login_env.lower() == "true"
         logger.info(f"[CONFIG] USE_SAML_LOGIN set from env: {saml_login_env} -> {_runtime_config.use_saml_login}")
-    
-    logger.info(f"[CONFIG] get_config() returning use_saml_login={_runtime_config.use_saml_login}")
         
     _runtime_config.reranker_model = os.getenv("RAG_RERANKER_MODEL", _runtime_config.reranker_model)
     _runtime_config.main_engine = os.getenv("RAG_MAIN_ENGINE", _runtime_config.main_engine).lower()
@@ -236,7 +238,16 @@ def get_config() -> AppConfig:
     except ValueError:
         logger.warning("Invalid RAG_TEMPERATURE in env. Using default.")
 
+    _env_applied = True
     return _runtime_config
+
+
+def reload_config() -> AppConfig:
+    """Re-apply environment variables on the next config read."""
+    global _env_applied
+    _env_applied = False
+    return get_config()
+
 
 def set_main_model(host: str, model: str):
     _runtime_config.main_model = OllamaConfig(host=host, model_name=model)

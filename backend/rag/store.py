@@ -75,7 +75,6 @@ class VectorStore:
         Note: ChromaDB reads are thread-safe, so no lock needed for concurrent queries.
         This removes the read-side bottleneck that was serializing all operations.
         """
-        self.refresh_collection(force=False)
         return self.collection.query(
             query_embeddings=query_embeddings,
             n_results=n_results,
@@ -87,7 +86,6 @@ class VectorStore:
         Retrieves documents directly by metadata (filtering without embedding).
         Note: ChromaDB reads are thread-safe, so no lock needed.
         """
-        self.refresh_collection(force=False)
         return self.collection.get(
             where=where,
             limit=limit,
@@ -95,7 +93,6 @@ class VectorStore:
         )
 
     def count(self) -> int:
-        self.refresh_collection(force=False)
         return self.collection.count()
 
     def get_all_files(self) -> List[str]:
@@ -104,18 +101,16 @@ class VectorStore:
             if self._files_cache is not None and (time.monotonic() - self._files_cache_at) < 30.0:
                 return list(self._files_cache)
 
-            self.refresh_collection(force=False)
             filenames = set()
             offset = 0
             limit = 500
             
             while True:
-                with self.lock:
-                    results = self.collection.get(
-                        include=['metadatas'],
-                        limit=limit,
-                        offset=offset
-                    )
+                results = self.collection.get(
+                    include=['metadatas'],
+                    limit=limit,
+                    offset=offset
+                )
                 
                 metas = results.get('metadatas', [])
                 if not metas:

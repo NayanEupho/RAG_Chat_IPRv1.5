@@ -1,7 +1,5 @@
 from langgraph.graph import StateGraph, END
 from backend.graph.state import AgentState
-from backend.graph.nodes.router import route_query
-from backend.graph.nodes.rewriter import rewrite_query
 from backend.graph.nodes.retriever import retrieve_documents
 from backend.graph.nodes.generate import generate_answer
 from backend.state.checkpoint import get_checkpointer
@@ -51,6 +49,8 @@ def build_graph():
     # Optimized for Stability. Good for 7B/14B Models.
     else:
         logger.info("[WORKFLOW] Mode: MODULAR (Router -> Rewriter -> Retriever)")
+        from backend.graph.nodes.router import route_query
+        from backend.graph.nodes.rewriter import rewrite_query
         
         # Add Nodes
         workflow.add_node("router", route_query)

@@ -128,6 +128,37 @@ async def test_ensure_rag_ready_accepts_stale_embedding_ready_even_when_main_unr
 
 
 @pytest.mark.asyncio
+async def test_ensure_rag_ready_does_not_refresh_during_real_request(monkeypatch):
+    import backend.llm.health as health
+    from backend.llm.warmup import real_request_scope
+
+    health.invalidate_model_health_cache()
+    monkeypatch.setenv("RAG_HEALTH_TTL_SECONDS", "1")
+    monkeypatch.setenv("RAG_HEALTH_STALE_READY_SECONDS", "300")
+    monkeypatch.setattr(health, "get_config", _config)
+    monkeypatch.setattr(health, "_is_listed", _listed)
+    monkeypatch.setattr(health, "_is_loaded_best_effort", _loaded)
+
+    await health.get_model_health(force=True)
+    monkeypatch.setattr(health, "_health_cache_at", time.monotonic() - 5)
+
+    scheduled = {"value": False}
+
+    def fake_schedule():
+        scheduled["value"] = True
+        return True
+
+    monkeypatch.setattr(health, "schedule_model_health_refresh", fake_schedule)
+
+    with real_request_scope():
+        snapshot = await health.ensure_rag_ready()
+
+    assert snapshot["embedding_model"]["query_ready"] is True
+    assert snapshot["stale_ready_accepted"] is True
+    assert scheduled["value"] is False
+
+
+@pytest.mark.asyncio
 async def test_ensure_rag_ready_refreshes_and_fails_closed_when_cache_is_too_old(monkeypatch):
     import backend.llm.health as health
 

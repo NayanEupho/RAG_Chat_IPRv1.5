@@ -53,9 +53,9 @@ def _utc_now() -> str:
 
 def _health_ttl_seconds() -> float:
     try:
-        return max(1.0, float(os.getenv("RAG_HEALTH_TTL_SECONDS", "15")))
+        return max(1.0, float(os.getenv("RAG_HEALTH_TTL_SECONDS", "120")))
     except ValueError:
-        return 15.0
+        return 120.0
 
 
 def _probe_timeout_seconds() -> float:
@@ -67,9 +67,9 @@ def _probe_timeout_seconds() -> float:
 
 def _stale_ready_seconds() -> float:
     try:
-        return max(_health_ttl_seconds(), float(os.getenv("RAG_HEALTH_STALE_READY_SECONDS", "300")))
+        return max(_health_ttl_seconds(), float(os.getenv("RAG_HEALTH_STALE_READY_SECONDS", "600")))
     except ValueError:
-        return 300.0
+        return 600.0
 
 
 def _cache_age_seconds(now: float | None = None) -> float:
@@ -265,7 +265,12 @@ async def ensure_rag_ready() -> dict[str, Any]:
         if age <= _health_ttl_seconds():
             return cached_snapshot or {}
         if age <= _stale_ready_seconds():
-            schedule_model_health_refresh()
+            try:
+                from backend.llm.warmup import real_request_active
+                if not real_request_active():
+                    schedule_model_health_refresh()
+            except Exception:
+                schedule_model_health_refresh()
             cached_snapshot = cached_snapshot or {}
             cached_snapshot["stale_ready_accepted"] = True
             return cached_snapshot

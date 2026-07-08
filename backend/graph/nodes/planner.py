@@ -176,6 +176,37 @@ def _indexed_acronyms(ttl_seconds: float = 300.0) -> set[str]:
     return set(terms)
 
 
+async def _indexed_acronyms_async(ttl_seconds: float = 300.0) -> set[str]:
+    now = time.monotonic()
+    if _ACRONYM_CACHE["terms"] and (now - _ACRONYM_CACHE["loaded_at"]) < ttl_seconds:
+        return set(_ACRONYM_CACHE["terms"])
+
+    def load_terms() -> set[str]:
+        terms = set()
+        try:
+            from backend.rag.store import get_vector_store
+            store = get_vector_store()
+            results = store.collection.get(include=["metadatas"], limit=1000)
+            for meta in results.get("metadatas") or []:
+                if not meta:
+                    continue
+                haystack = " ".join(str(meta.get(k, "")) for k in [
+                    "filename", "section_title", "section_path", "question_text", "doc_type"
+                ])
+                for token in re.findall(r"\b[A-Z][A-Z0-9&/-]{1,7}\b", haystack):
+                    clean = token.strip("-/&")
+                    if clean and clean not in _ACRONYM_STOPWORDS and not clean.isdigit():
+                        terms.add(clean.lower())
+        except Exception as e:
+            logger.debug(f"[PLANNER] Indexed acronym scan failed: {e}")
+        return terms
+
+    terms = await asyncio.to_thread(load_terms)
+    _ACRONYM_CACHE["terms"] = terms
+    _ACRONYM_CACHE["loaded_at"] = now
+    return set(terms)
+
+
 def _query_indexed_acronyms(query: str) -> set[str]:
     query_terms = {
         token.lower()
@@ -185,6 +216,17 @@ def _query_indexed_acronyms(query: str) -> set[str]:
     if not query_terms:
         return set()
     return query_terms & _indexed_acronyms()
+
+
+async def _query_indexed_acronyms_async(query: str) -> set[str]:
+    query_terms = {
+        token.lower()
+        for token in re.findall(r"\b[A-Za-z][A-Za-z0-9&/-]{1,7}\b", query)
+        if token.upper() not in _ACRONYM_STOPWORDS
+    }
+    if not query_terms:
+        return set()
+    return query_terms & await _indexed_acronyms_async()
 
 
 def _contains_keyword(query: str, keyword: str) -> bool:
@@ -549,7 +591,7 @@ async def planner_node(state: AgentState):
                 "context_action": context_action,
             }
 
-        indexed_acronyms = _query_indexed_acronyms(original_query)
+        indexed_acronyms = await _query_indexed_acronyms_async(original_query)
         if indexed_acronyms:
             logger.info(f"[PLANNER] Fast-Path: Direct RAG (indexed acronym: {sorted(indexed_acronyms)})")
             semantic_queries = _build_semantic_queries(cleaned_query or original_query, max_variants=2)

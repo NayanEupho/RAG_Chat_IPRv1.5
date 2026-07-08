@@ -931,6 +931,7 @@ def test_runtime_config_exposes_separate_normalization_model(isolated_admin, mon
     monkeypatch.setenv("RAG_EMBED_MODEL", "embed-model")
     monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-host:11434")
     monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-model")
+    config_module.reload_config()
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -947,16 +948,15 @@ def test_runtime_config_exposes_separate_normalization_model(isolated_admin, mon
 
 def test_runtime_config_refreshes_normalization_model_from_env(isolated_admin, monkeypatch):
     from backend import config as config_module
-    from backend.config import get_config
 
     config_module._runtime_config.normalization_model = None
     monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-a:11434")
     monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-a")
-    assert get_config().normalization_model.model_name == "norm-a"
+    assert config_module.reload_config().normalization_model.model_name == "norm-a"
 
     monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-b:11434")
     monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-b")
-    cfg = get_config()
+    cfg = config_module.reload_config()
 
     assert cfg.normalization_model.host == "http://norm-b:11434"
     assert cfg.normalization_model.model_name == "norm-b"
@@ -1005,6 +1005,7 @@ def test_create_batch_rejects_normalization_without_model(isolated_admin, monkey
     monkeypatch.setenv("RAG_MAIN_MODEL", "")
     monkeypatch.setenv("RAG_NORMALIZATION_HOST", "")
     monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "")
+    config_module.reload_config()
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -1031,6 +1032,7 @@ def test_create_batch_uses_env_normalization_model_when_form_model_omitted(isola
     monkeypatch.setenv("RAG_EMBED_MODEL", "embed-model")
     monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-host:11434")
     monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-model")
+    config_module.reload_config()
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -1205,6 +1207,7 @@ def test_update_batch_config_fills_env_normalization_model(isolated_admin, monke
     monkeypatch.setenv("RAG_EMBED_MODEL", "embed-model")
     monkeypatch.setenv("RAG_NORMALIZATION_HOST", "http://norm-host:11434")
     monkeypatch.setenv("RAG_NORMALIZATION_MODEL", "norm-model")
+    config_module.reload_config()
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
