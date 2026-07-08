@@ -13,6 +13,12 @@ FROM base AS builder
 WORKDIR /app
 COPY . .
 
+# NEXT_PUBLIC_* values are compiled into client bundles by Next.js.
+ARG NEXT_PUBLIC_USE_SAML_LOGIN=false
+ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+ENV NEXT_PUBLIC_USE_SAML_LOGIN=$NEXT_PUBLIC_USE_SAML_LOGIN
+ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
+
 # Build the application
 RUN bun run build
 
@@ -23,6 +29,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ARG NEXT_PUBLIC_USE_SAML_LOGIN=false
+ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+ENV NEXT_PUBLIC_USE_SAML_LOGIN=$NEXT_PUBLIC_USE_SAML_LOGIN
+ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
 
 # Copy only the public assets
 COPY --from=builder /app/public ./public

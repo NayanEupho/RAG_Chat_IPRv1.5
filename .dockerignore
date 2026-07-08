@@ -1,0 +1,45 @@
+.git/
+.venv/
+venv/
+ENV/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+
+# Local configuration and secrets are injected through compose env/volumes.
+.env
+.env.*
+*.key
+*.crt
+*.pem
+
+# Frontend/admin projects have their own images.
+frontend/
+Admin_Dashboard/
+
+# Local/runtime data should be mounted, not baked into the backend image.
+chroma_db/
+upload_docs/
+generated_doc_md/
+admin_data/
+tests/test_chroma/
+tests/test_docs/
+
+# Logs and local benchmark artifacts.
+*.log
+*.err
+semantic_backend_*.err
+semantic_context_eval_*.json
+semantic_context_eval_*.log
+ttft_backend_*.err
+ttft_backend_*.log
+ttft_*.log
+*_bugs_issues.md
+
+# Editor / OS clutter.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
