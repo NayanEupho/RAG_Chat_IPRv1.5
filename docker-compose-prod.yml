@@ -92,6 +92,9 @@ services:
     build:
       context: ./Admin_Dashboard
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_ADMIN_BASE_PATH: "/admin"
+        NEXT_PUBLIC_ADMIN_API_BASE: "/admin/api/admin-backend"
     container_name: ipr-rag-admin-prod
     ports:
       - "3001:3001"
@@ -103,7 +106,8 @@ services:
       # Server-side Next.js proxy target for /api/admin-backend/*.
       - ADMIN_BACKEND_UPSTREAM=http://agent-backend-prod:8000
       # Keep browser calls same-origin through the dashboard proxy.
-      - NEXT_PUBLIC_ADMIN_API_BASE=
+      - NEXT_PUBLIC_ADMIN_BASE_PATH=/admin
+      - NEXT_PUBLIC_ADMIN_API_BASE=/admin/api/admin-backend
     depends_on:
       - agent-backend-prod
     restart: unless-stopped
