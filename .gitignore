@@ -78,6 +78,7 @@ Thumbs.db
 admin_data/
 buggy_ui/
 Admin_Dashboard/frontend_visual_refernce/
+ui reference/
 inspect_output.txt
 rag_output.txt
 rag_debug_out.txt
