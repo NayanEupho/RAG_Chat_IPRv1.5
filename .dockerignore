@@ -15,9 +15,12 @@ __pycache__/
 *.crt
 *.pem
 
-# Frontend/admin projects have their own images.
+# Frontend/admin projects have their own images. The backend image keeps only
+# the admin-user CLI helper because it writes to the backend admin database.
 frontend/
-Admin_Dashboard/
+Admin_Dashboard/**
+!Admin_Dashboard/
+!Admin_Dashboard/add_admin.py
 
 # Local/runtime data should be mounted, not baked into the backend image.
 chroma_db/

@@ -56,6 +56,7 @@ services:
       # Persist uploaded documents and the vector database
       - ./upload_docs:/app/upload_docs
       - ./chroma_db:/app/chroma_db
+      - ./admin_data:/app/admin_data
       # Optional: Persist SQLite chat history/checkpoints
       - ./agent_state.db:/app/agent_state.db
       # Mount SAML certificates/keys instead of baking them into the image
