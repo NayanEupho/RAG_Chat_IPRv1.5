@@ -1,11 +1,12 @@
 import sqlite3
 import json
 import logging
+import os
 import threading
 import re
 from datetime import datetime
 
-DB_PATH = "rag_chat_sessions.db"
+DB_PATH = os.getenv("RAG_CHAT_DB_PATH", "rag_chat_sessions.db")
 logger = logging.getLogger(__name__)
 
 # Thread-local storage for SQLite connections (connection pooling)
@@ -14,6 +15,9 @@ _local = threading.local()
 def get_connection() -> sqlite3.Connection:
     """Get a thread-local SQLite connection (pseudo connection pooling)."""
     if not hasattr(_local, 'connection') or _local.connection is None:
+        db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         _local.connection = sqlite3.connect(DB_PATH, check_same_thread=False)
         # Enable WAL mode for better concurrency (Zero-copy, high-speed)
         _local.connection.execute("PRAGMA journal_mode=WAL")

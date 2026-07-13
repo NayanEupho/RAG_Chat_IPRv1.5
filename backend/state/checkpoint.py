@@ -7,10 +7,11 @@ in a local SQLite database.
 """
 
 from langgraph.checkpoint.memory import MemorySaver
+import os
 import sqlite3
 
 # Physical DB used for session metadata, not the actual checkpoints
-DB_PATH = "rag_chat_sessions.db"
+DB_PATH = os.getenv("RAG_CHAT_DB_PATH", "rag_chat_sessions.db")
 
 # Cache for the checkpointer instance
 _memory_saver = None

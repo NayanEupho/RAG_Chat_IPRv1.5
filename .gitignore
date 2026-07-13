@@ -39,6 +39,7 @@ ENV/
 # Backend Specific (Databases & Uploads)
 chroma_db/
 rag_chat_sessions.db*
+chat_data/
 upload_docs/*
 generated_doc_md/*
 !upload_docs/.gitkeep

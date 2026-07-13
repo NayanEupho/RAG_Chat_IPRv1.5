@@ -51,6 +51,7 @@ services:
       - USE_SAML_LOGIN=true
       - ANONYMIZED_TELEMETRY=False
       - INGEST_FORCE_CPU=True
+      - RAG_CHAT_DB_PATH=/app/chat_data/rag_chat_sessions.db
 
     volumes:
       # Persist uploaded documents and the vector database
@@ -58,7 +59,7 @@ services:
       - ./chroma_db:/app/chroma_db
       - ./admin_data:/app/admin_data
       # Persist user chat sessions/messages and graph/checkpoint state
-      - ./rag_chat_sessions.db:/app/rag_chat_sessions.db
+      - ./chat_data:/app/chat_data
       - ./agent_state.db:/app/agent_state.db
       # Mount SAML certificates/keys instead of baking them into the image
       - ./idp.crt:/app/idp.crt:ro
