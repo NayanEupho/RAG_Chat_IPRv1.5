@@ -64,10 +64,13 @@ async def chat_endpoint(request: ChatRequest, user: SAMLUser = Depends(get_curre
             last_message = messages[-1]
             response_text = last_message.content if isinstance(last_message, AIMessage) else str(last_message)
             
+        final_intent = final_state.get('intent', 'unknown')
+        final_sources = [] if final_intent == "chat" else final_state.get('documents', [])
+
         return ChatResponse(
             response=response_text,
-            intent=final_state.get('intent', 'unknown'),
-            sources=final_state.get('documents', [])
+            intent=final_intent,
+            sources=final_sources
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -198,6 +201,10 @@ async def chat_stream_endpoint(request_body: ChatRequest, request: Request, user
             final_docs = final_state.values.get("documents", [])
             targeted_docs = final_state.values.get("targeted_docs", [])
             retrieval_metrics = final_state.values.get("retrieval_metrics", {})
+            if final_intent == "chat":
+                final_docs = []
+                targeted_docs = []
+                retrieval_metrics = {}
             auto_session_title = None
             if not full_response:
                 final_messages = final_state.values.get("messages", [])

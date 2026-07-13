@@ -316,6 +316,14 @@ button {
   font-weight: 700;
   line-height: 1.25;
   vertical-align: baseline;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.user-file-pill:hover {
+  background: rgba(219, 234, 254, 0.32);
+  border-color: rgba(219, 234, 254, 0.72);
+  transform: translateY(-1px);
 }
 
 .message-bubble.user:hover .copy-btn-user {
@@ -758,6 +766,11 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.source-file-link.disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* Modal Styles */

@@ -41,6 +41,13 @@ type ChatMessage = {
     thoughts?: ThoughtStep[];
 };
 
+const OPENABLE_FILE_RE = /\.(pdf|md|txt|png|jpe?g|csv|xlsx)$/i;
+
+const isOpenableDocumentName = (filename: string) => {
+    const cleaned = filename.trim();
+    return cleaned.length > 0 && !cleaned.includes('\n') && OPENABLE_FILE_RE.test(cleaned);
+};
+
 const parseEnvelopeTitle = (envelope: string) => {
     const match = envelope.match(/Source:\s*([^|\]\n]+)/);
     if (match && match[1]) {
@@ -98,7 +105,7 @@ const MessageRow = React.memo(function MessageRow({
     handleOpenFile,
     toggleSources,
 }: MessageRowProps) {
-    const sourceList = msg.sources || [];
+    const sourceList = msg.intent === 'chat' ? [] : (msg.sources || []);
 
     const renderCitationChildren = (children: React.ReactNode) => {
         if (sourceList.length === 0) return children;
@@ -268,16 +275,22 @@ const MessageRow = React.memo(function MessageRow({
                                                     <span className="source-item-preview">{meta.preview}</span>
                                                 </span>
                                             </button>
-                                            <button
-                                                className="source-file-link"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleOpenFile(meta.title);
-                                                }}
-                                                title={`Open ${meta.title}`}
-                                            >
-                                                <ArrowUpRight size={14} />
-                                            </button>
+                                            {isOpenableDocumentName(meta.title) ? (
+                                                <button
+                                                    className="source-file-link"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleOpenFile(meta.title);
+                                                    }}
+                                                    title={`Open ${meta.title}`}
+                                                >
+                                                    <ArrowUpRight size={14} />
+                                                </button>
+                                            ) : (
+                                                <span className="source-file-link disabled" aria-hidden="true">
+                                                    <ArrowUpRight size={14} />
+                                                </span>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -557,8 +570,12 @@ export default function ChatInterface() {
     }, []);
 
     const handleOpenFile = useCallback((filename: string) => {
+        if (!isOpenableDocumentName(filename)) {
+            toast.error("This source is a chunk, not an openable file.");
+            return;
+        }
         const url = `${getApiBase()}/files/${encodeURIComponent(filename)}`;
-        window.open(url, '_blank');
+        window.open(url, '_blank', 'noopener,noreferrer');
         toast.info(`Opening ${filename}...`);
     }, [getApiBase]);
 
@@ -667,16 +684,22 @@ export default function ChatInterface() {
         nonOverlapping.forEach((match, idx) => {
             if (match.start > cursor) parts.push(content.slice(cursor, match.start));
             parts.push(
-                <span className="user-file-pill" key={`${match.doc}-${idx}`}>
+                <button
+                    type="button"
+                    className="user-file-pill"
+                    key={`${match.doc}-${idx}`}
+                    onClick={() => handleOpenFile(match.doc)}
+                    title={`Open ${match.doc}`}
+                >
                     <FileText size={13} />
                     {match.doc}
-                </span>
+                </button>
             );
             cursor = match.end;
         });
         if (cursor < content.length) parts.push(content.slice(cursor));
         return parts;
-    }, [allDocs]);
+    }, [allDocs, handleOpenFile]);
 
     const toggleSources = useCallback((idx: number) => {
         setExpandedSources(prev => ({ ...prev, [idx]: !prev[idx] }));

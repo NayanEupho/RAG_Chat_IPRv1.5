@@ -475,10 +475,32 @@ async def test_planner_chat_clears_stale_retrieval_metrics():
     state = {
         "mode": "auto",
         "messages": [HumanMessage(content="What is the capital of Japan?")],
+        "documents": ["previous retrieved chunk"],
+        "targeted_docs": ["CGHS GUIDLINES.pdf"],
         "retrieval_metrics": {"stale": True},
     }
 
     result = await planner_node(state)
 
     assert result["intent"] == "chat"
+    assert result["documents"] == []
+    assert result["targeted_docs"] == []
+    assert result["retrieval_metrics"] == {}
+
+
+@pytest.mark.asyncio
+async def test_planner_forced_chat_clears_stale_documents():
+    state = {
+        "mode": "chat",
+        "messages": [HumanMessage(content="How do I write hello world in PHP?")],
+        "documents": ["[Source: CGHS GUIDLINES.pdf]\nstale chunk"],
+        "targeted_docs": ["CGHS GUIDLINES.pdf"],
+        "retrieval_metrics": {"stale": True},
+    }
+
+    result = await planner_node(state)
+
+    assert result["intent"] == "chat"
+    assert result["documents"] == []
+    assert result["targeted_docs"] == []
     assert result["retrieval_metrics"] == {}

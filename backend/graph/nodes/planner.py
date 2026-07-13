@@ -274,12 +274,12 @@ def _build_semantic_queries(query: str, targets: list[str] | None = None, max_va
     return [{"query": variant, "target": target} for target in target_list for variant in deduped]
 
 
-def _chat_result(query: str, documents: list | None = None, query_embedding=None) -> dict:
+def _chat_result(query: str, query_embedding=None) -> dict:
     return {
         "intent": "chat",
         "query": query,
         "targeted_docs": [],
-        "documents": documents or [],
+        "documents": [],
         "semantic_queries": [],
         "query_embedding": query_embedding,
         "retrieval_metrics": {},
@@ -498,7 +498,7 @@ async def planner_node(state: AgentState):
     # ---------------------------------------------------------
     if mode == 'chat':
         logger.info("[PLANNER] Mode: Forced Chat")
-        return _chat_result(original_query, documents=state.get('documents', []))
+        return _chat_result(original_query)
 
     if mode == 'auto' and "@" not in original_query:
         query_lower = original_query.lower()
@@ -706,7 +706,7 @@ async def planner_node(state: AgentState):
 
         logger.info(f"[PLANNER] Plan: {final_intent} | {len(semantic_queries)} sub-queries")
 
-        docs_value = state.get('documents', []) if final_intent == "chat" or context_action in {"answer_from_existing", "hybrid"} else []
+        docs_value = state.get('documents', []) if context_action in {"answer_from_existing", "hybrid"} else []
 
         return {
             "intent": final_intent,

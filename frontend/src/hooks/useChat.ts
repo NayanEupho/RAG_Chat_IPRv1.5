@@ -306,6 +306,7 @@ export function useChat() {
                 }
                 flushTokenContent();
                 const metadata = JSON.parse(eventData);
+                const isChatIntent = metadata.intent === 'chat';
                 setMessages(prev => {
                   const next = [...prev];
                   for (let i = next.length - 1; i >= 0; i--) {
@@ -313,8 +314,8 @@ export function useChat() {
                       next[i] = {
                         ...next[i],
                         intent: metadata.intent,
-                        sources: metadata.sources,
-                        targeted_docs: metadata.targeted_docs,
+                        sources: isChatIntent ? [] : metadata.sources,
+                        targeted_docs: isChatIntent ? [] : metadata.targeted_docs,
                         ttft: next[i].ttft ?? metadata.ttft_ms,
                         status: undefined
                       };
