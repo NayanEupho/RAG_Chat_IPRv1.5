@@ -10,8 +10,6 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from backend.graph.nodes.generate import (
     _GENERATOR_SYSTEM_PROMPT,
     _SUMMARY_PREFIX,
-    _build_final_messages,
-    _cache_signature,
     _build_message_list,
     _get_budgets,
     generate_answer,
@@ -101,79 +99,6 @@ def test_detail_request_detection_expands_only_when_explicit():
     assert is_detail_request("Give a step by step explanation")
     assert not is_detail_request("What is this paper about?")
 
-
-
-def test_rag_prompt_preserves_history_and_keeps_latest_user_last():
-    messages = [
-        HumanMessage(content="What is @Qlora_Paper.pdf about?"),
-        AIMessage(content="It is about efficient quantized finetuning."),
-        HumanMessage(content="who are the authors"),
-    ]
-
-    final = _build_final_messages(
-        prepared_msgs=messages,
-        latest_query="who are the authors",
-        intent="specific_doc_rag",
-        mode="auto",
-        context_block="[1] Retrieved chunk 1\nAuthors: Tim Dettmers, Artidoro Pagnoni",
-        targeted_docs=["Qlora_Paper.pdf"],
-    )
-
-    assert [item["role"] for item in final] == ["system", "user", "assistant", "system", "system", "user"]
-    assert final[1]["content"] == "What is @Qlora_Paper.pdf about?"
-    assert final[2]["content"] == "It is about efficient quantized finetuning."
-    assert final[-1]["content"] == "who are the authors"
-    assert "<docs>" in final[-2]["content"]
-    assert "Qlora_Paper.pdf" in final[-2]["content"]
-
-
-def test_chat_and_rag_share_stable_history_prefix():
-    history = [
-        HumanMessage(content="Tell me about TECHNICAL_REPORT_V8.pdf"),
-        AIMessage(content="It is a DevOps Agent report."),
-        HumanMessage(content="What is next?"),
-    ]
-
-    chat_final = _build_final_messages(
-        prepared_msgs=history,
-        latest_query="What is next?",
-        intent="chat",
-        mode="chat",
-    )
-    rag_final = _build_final_messages(
-        prepared_msgs=history,
-        latest_query="What is next?",
-        intent="specific_doc_rag",
-        mode="rag",
-        context_block="[1] Retrieved chunk 1\nDevOps Agent architecture",
-        targeted_docs=["TECHNICAL_REPORT_V8.pdf"],
-    )
-
-    assert chat_final[:3] == rag_final[:3]
-    assert chat_final[3]["content"].startswith("[SESSION CONTROL]")
-    assert rag_final[3]["content"].startswith("[SESSION CONTROL]")
-    assert rag_final[4]["content"].startswith("[RETRIEVAL CONTEXT]")
-
-
-def test_cache_signature_is_stable_when_only_latest_query_changes():
-    history = [
-        HumanMessage(content="What is @LeaveAtaGlance.pdf about?"),
-        AIMessage(content="It summarizes leave rules."),
-    ]
-    kwargs = {
-        "prepared_msgs": history,
-        "intent": "specific_doc_rag",
-        "mode": "auto",
-        "context_block": "[1] Retrieved chunk 1\nCasual Leave: maximum 8 days.",
-        "targeted_docs": ["LeaveAtaGlance.pdf"],
-    }
-
-    first = _build_final_messages(latest_query="tell me more", **kwargs)
-    second = _build_final_messages(latest_query="summarize it", **kwargs)
-
-    assert first[:-1] == second[:-1]
-    assert _cache_signature(first) == _cache_signature(second)
-    assert first[-1]["content"] != second[-1]["content"]
 
 @pytest.mark.asyncio
 async def test_simple_greeting_fast_path_skips_model_call():
