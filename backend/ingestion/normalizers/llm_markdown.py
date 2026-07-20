@@ -3,7 +3,8 @@ import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from collections.abc import Callable
+from typing import Any
 
 import ollama
 
@@ -11,7 +12,7 @@ from backend.config import OllamaConfig, get_config
 from backend.llm.client import OpenAICompatibleSyncClient, normalize_engine
 
 logger = logging.getLogger("rag_chat_ipr.ingestion.normalizers")
-_CLIENT_CACHE: dict[tuple[int, str], Any] = {}
+_CLIENT_CACHE: dict[tuple[int, str, str, str, bool], Any] = {}
 _CLIENT_CACHE_LOCK = threading.Lock()
 
 
@@ -88,7 +89,7 @@ class NormalizationOptions:
 class NormalizationResult:
     markdown: str
     accepted: bool
-    manifest: Dict[str, Any]
+    manifest: dict[str, Any]
 
 
 class LlmMarkdownNormalizer:
@@ -110,7 +111,7 @@ class LlmMarkdownNormalizer:
         filename: str,
         doc_type: str,
         parser: str,
-        model_config: Dict[str, Any] | None = None,
+        model_config: dict[str, Any] | None = None,
     ) -> NormalizationResult:
         cfg = get_config()
         normalization_model = self._resolve_model(cfg, model_config)
@@ -186,7 +187,7 @@ class LlmMarkdownNormalizer:
             logger.warning("[NORMALIZE] Rejected normalized output for %s: %s", filename, validation["errors"])
         return NormalizationResult(markdown=stitched if accepted else raw, accepted=accepted, manifest=manifest)
 
-    def _resolve_model(self, cfg: Any, model_config: Dict[str, Any] | None) -> OllamaConfig | None:
+    def _resolve_model(self, cfg: Any, model_config: dict[str, Any] | None) -> OllamaConfig | None:
         if model_config:
             host = model_config.get("endpoint") or model_config.get("host")
             model_name = model_config.get("model_id") or model_config.get("model_name")
@@ -203,7 +204,7 @@ class LlmMarkdownNormalizer:
             client = _CLIENT_CACHE.get(key)
             if client is None:
                 if self.client_factory is not None:
-                    client = self.client_factory(host=model.host)
+                    client = self.client_factory(model.host)
                 elif normalized_engine == "ollama":
                     client = ollama.Client(host=model.host)
                 elif normalized_engine == "openai-compatible":
@@ -247,7 +248,7 @@ class LlmMarkdownNormalizer:
             "</raw_extracted_markdown>\n"
         )
 
-    def _make_batches(self, markdown: str) -> List[str]:
+    def _make_batches(self, markdown: str) -> list[str]:
         text = markdown.strip()
         if len(text) <= self.options.batch_chars:
             return [text]
@@ -266,11 +267,11 @@ class LlmMarkdownNormalizer:
             batches.append(current.strip())
         return batches
 
-    def _split_on_headings(self, markdown: str) -> List[str]:
+    def _split_on_headings(self, markdown: str) -> list[str]:
         parts = re.split(r"(?m)(?=^#{1,6}\s+\S)", markdown)
         return [part.strip() for part in parts if part.strip()] or [markdown]
 
-    def _stitch(self, parts: List[str]) -> str:
+    def _stitch(self, parts: list[str]) -> str:
         if not parts:
             return ""
         output = parts[0].strip()
@@ -292,7 +293,7 @@ class LlmMarkdownNormalizer:
                 lines.pop(0)
         return "\n".join(lines).strip()
 
-    def _validate(self, raw: str, normalized: str, *, doc_type: str) -> Dict[str, Any]:
+    def _validate(self, raw: str, normalized: str, *, doc_type: str) -> dict[str, Any]:
         raw_words = self._word_count(raw)
         normalized_words = self._word_count(normalized)
         ratio = normalized_words / max(raw_words, 1)
@@ -319,7 +320,7 @@ class LlmMarkdownNormalizer:
             "warnings": warnings,
         }
 
-    def _batch_warnings(self, markdown: str) -> List[str]:
+    def _batch_warnings(self, markdown: str) -> list[str]:
         warnings = []
         if markdown.count("```") % 2 != 0:
             warnings.append("unclosed_code_fence")
@@ -327,7 +328,7 @@ class LlmMarkdownNormalizer:
             warnings.append("no_headings")
         return warnings
 
-    def _headings(self, markdown: str) -> List[str]:
+    def _headings(self, markdown: str) -> list[str]:
         return re.findall(r"(?m)^#{1,6}\s+.+$", markdown or "")
 
     def _word_count(self, text: str) -> int:

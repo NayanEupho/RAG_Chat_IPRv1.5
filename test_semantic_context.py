@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import json
 import os
@@ -13,6 +14,11 @@ except Exception:
     pass
 
 API_BASE = os.getenv("SEMANTIC_API_BASE", os.getenv("TTFT_API_BASE", "http://localhost:8000"))
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run semantic/context regression checks against a RAG Chat backend.")
+    parser.add_argument("--base-url", default=None, help="Backend base URL, for example http://127.0.0.1:8000")
+    return parser.parse_args()
 OUTPUT_PATH = Path(os.getenv("SEMANTIC_EVAL_OUTPUT", "semantic_context_eval_latest.json"))
 
 
@@ -347,5 +353,13 @@ async def run_all() -> int:
     return 1 if failed_turns else 0
 
 
-if __name__ == "__main__":
+def main():
+    global API_BASE
+    args = parse_args()
+    if args.base_url:
+        API_BASE = args.base_url.rstrip("/")
     raise SystemExit(asyncio.run(run_all()))
+
+
+if __name__ == "__main__":
+    main()

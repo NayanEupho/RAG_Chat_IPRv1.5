@@ -75,7 +75,8 @@ def main():
     port = int(os.getenv("RAG_PORT", "8000"))
     logger_level = "info"
     
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=port, reload=True, forwarded_allow_ips="*", log_level=logger_level)
+    reload_enabled = os.getenv("RAG_RELOAD", "false").strip().lower() == "true"
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=port, reload=reload_enabled, forwarded_allow_ips="*", log_level=logger_level)
 
 if __name__ == "__main__":
     main()

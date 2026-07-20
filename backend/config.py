@@ -78,7 +78,7 @@ class AppConfig(BaseModel):
 
     # Model Context Window (for dynamic token budget)
     # Auto-detected from Ollama model metadata at startup, override via MODEL_CONTEXT_WINDOW env var
-    # Default is conservative (16K) — models like Nemotron-3 support 262K but allocating
+    # Default is conservative (16K) - models like Nemotron-3 support 262K but allocating
     # the full KV cache on a 120B model is extremely memory-heavy and slows TTFT.
     model_context_window: int = 16384
 
@@ -113,6 +113,12 @@ _runtime_config = AppConfig()
 _dotenv_loaded = False
 _env_applied = False
 _dotenv_lock = threading.Lock()
+
+def _env_text(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
 
 def get_config() -> AppConfig:
     # Load .env file if present (supports uvicorn workers that may not inherit shell env vars)
@@ -165,10 +171,10 @@ def get_config() -> AppConfig:
         logger.info(f"[CONFIG] USE_SAML_LOGIN set from env: {saml_login_env} -> {_runtime_config.use_saml_login}")
         
     _runtime_config.reranker_model = os.getenv("RAG_RERANKER_MODEL", _runtime_config.reranker_model)
-    _runtime_config.main_engine = os.getenv("RAG_MAIN_ENGINE", _runtime_config.main_engine).lower()
-    _runtime_config.embedding_engine = os.getenv("RAG_EMBED_ENGINE", _runtime_config.embedding_engine).lower()
-    _runtime_config.normalization_engine = os.getenv("RAG_NORMALIZATION_ENGINE", _runtime_config.normalization_engine).lower()
-    _runtime_config.vlm_engine = os.getenv("RAG_VLM_ENGINE", _runtime_config.vlm_engine).lower()
+    _runtime_config.main_engine = _env_text("RAG_MAIN_ENGINE", _runtime_config.main_engine).lower()
+    _runtime_config.embedding_engine = _env_text("RAG_EMBED_ENGINE", _runtime_config.embedding_engine).lower()
+    _runtime_config.normalization_engine = _env_text("RAG_NORMALIZATION_ENGINE", _runtime_config.normalization_engine).lower()
+    _runtime_config.vlm_engine = _env_text("RAG_VLM_ENGINE", _runtime_config.vlm_engine).lower()
     
     try:
         _runtime_config.rag_confidence_threshold = float(os.getenv("RAG_CONFIDENCE_THRESHOLD", str(_runtime_config.rag_confidence_threshold)))
@@ -239,7 +245,7 @@ def get_config() -> AppConfig:
     if no_think_env:
         _runtime_config.no_thinking = no_think_env.lower() == "true"
         if _runtime_config.no_thinking:
-            logger.info("[CONFIG] RAG_NO_THINKING=true — forcing reasoning=False")
+            logger.info("[CONFIG] RAG_NO_THINKING=true - forcing reasoning=False")
             
     try:
         _runtime_config.num_predict = int(os.getenv("RAG_NUM_PREDICT", str(_runtime_config.num_predict)))

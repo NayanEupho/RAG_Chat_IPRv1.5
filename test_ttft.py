@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import json
 import time
@@ -14,6 +15,12 @@ except Exception:
     pass
 
 API_BASE = os.getenv("TTFT_API_BASE", "http://localhost:8000")
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run TTFT benchmark against a RAG Chat backend.")
+    parser.add_argument("--base-url", default=None, help="Backend base URL, for example http://127.0.0.1:8000")
+    return parser.parse_args()
+
 STATUS_TIMEOUT_SECONDS = float(os.getenv("TTFT_STATUS_TIMEOUT_SECONDS", "10"))
 
 
@@ -469,6 +476,10 @@ async def run_all_tests():
 
 
 def main():
+    global API_BASE
+    args = parse_args()
+    if args.base_url:
+        API_BASE = args.base_url.rstrip("/")
     asyncio.run(run_all_tests())
     print("\nDone.")
 
