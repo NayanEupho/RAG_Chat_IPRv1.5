@@ -57,8 +57,11 @@ def _was_cancelled(token: int) -> bool:
 async def _warm_chat_model(cancel_token: int) -> str:
     if _was_cancelled(cancel_token):
         return "skipped"
-    from backend.llm.client import OllamaClientWrapper
+    from backend.config import get_config
+    from backend.llm.client import OllamaClientWrapper, normalize_engine
 
+    if normalize_engine(get_config().main_engine) != "ollama":
+        return "not_applicable"
     chat_model = OllamaClientWrapper.get_chat_model()
     await chat_model.ainvoke([
         {"role": "system", "content": "You are a helpful assistant."},
@@ -71,11 +74,13 @@ async def _warm_embedding_model(cancel_token: int) -> str:
     if _was_cancelled(cancel_token):
         return "skipped"
     from backend.config import get_config
-    from backend.llm.client import OllamaClientWrapper
+    from backend.llm.client import OllamaClientWrapper, normalize_engine
 
     cfg = get_config()
     if not cfg.embedding_model:
         return "not_configured"
+    if normalize_engine(cfg.embedding_engine) != "ollama":
+        return "not_applicable"
     client = OllamaClientWrapper.get_embedding_client()
     response = await client.embed(
         model=cfg.embedding_model.model_name,

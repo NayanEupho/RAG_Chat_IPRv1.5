@@ -10,9 +10,13 @@ from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
-import ollama
 import time
-from backend.config import set_main_model, set_embedding_model, set_rag_workflow
+
+import httpx
+import ollama
+
+from backend.config import reload_config, set_embedding_model, set_main_model, set_rag_workflow
+from backend.llm.client import normalize_engine
 
 # Shared Rich console for consistent terminal UI
 console = Console()
@@ -42,47 +46,87 @@ def select_host(service_name: str) -> str:
             if url:
                 return url
 
-def validate_model_on_host(host: str, model_name: str, service_type: str) -> bool:
+def _model_matches(configured_name: str, discovered_name: str) -> bool:
+    configured = configured_name.strip()
+    discovered = discovered_name.strip()
+    return configured == discovered or discovered.startswith(f"{configured}:")
+
+
+def validate_model_on_host(
+    host: str,
+    model_name: str,
+    service_type: str,
+    *,
+    engine: str = "ollama",
+    api_key: str = "",
+) -> bool:
     """Verifies if host is reachable and if model exists on it."""
     try:
         with console.status(f"[bold yellow]Validating {service_type} Config...[/bold yellow]", spinner="dots"):
-            client = ollama.Client(host=host)
-            # Step 1: Check Connectivity
-            try:
-                response = client.list()
-            except Exception as e:
-                console.print(f"[bold red]❌ [CONNECTIVITY ERROR][/bold red] "
-                              f"Failed to reach {service_type} host at [yellow]{host}[/yellow]")
-                console.print(f"[dim]Details: {e}[/dim]")
+            normalized_engine = normalize_engine(engine)
+            if normalized_engine == "ollama":
+                client = ollama.Client(host=host)
+                try:
+                    response = client.list()
+                except Exception as e:
+                    console.print(f"[bold red][CONNECTIVITY ERROR][/bold red] "
+                                  f"Failed to reach {service_type} host at [yellow]{host}[/yellow]")
+                    console.print(f"[dim]Details: {e}[/dim]")
+                    return False
+
+                models = response.get("models", [])
+                model_names = [m.get("model") or m.get("name") or "" for m in models]
+            elif normalized_engine == "openai-compatible":
+                base = host.rstrip("/")
+                base = base if base.endswith("/v1") else f"{base}/v1"
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                try:
+                    response = httpx.get(
+                        f"{base}/models",
+                        headers=headers,
+                        timeout=10,
+                        trust_env=False,
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except Exception as e:
+                    console.print(f"[bold red][CONNECTIVITY ERROR][/bold red] "
+                                  f"Failed to reach {service_type} host at [yellow]{host}[/yellow]")
+                    console.print(f"[dim]Details: {e}[/dim]")
+                    return False
+
+                models = payload.get("data", []) if isinstance(payload, dict) else []
+                model_names = [
+                    m.get("id") or m.get("model") or ""
+                    for m in models
+                    if isinstance(m, dict)
+                ]
+            else:
+                console.print(f"[bold red][ENGINE ERROR][/bold red] Unsupported engine: {engine}")
                 return False
-            
-            # Step 2: Check Model Existence
-            models = response.get('models', [])
-            model_names = [m['model'] for m in models]
-            
-            # Check for exact match or tag-less match
-            if model_name in model_names or any(m.startswith(f"{model_name}:") for m in model_names):
+
+            if any(_model_matches(model_name, name) for name in model_names):
                 console.print(Panel(
-                    f"[bold green]✓[/bold green] {service_type} Config Verified!\n"
+                    f"[bold green]OK[/bold green] {service_type} Config Verified!\n"
                     f"Model: [cyan]{model_name}[/cyan]\n"
                     f"Host:  [yellow]{host}[/yellow]",
                     border_style="green",
-                    expand=False
+                    expand=False,
                 ))
                 return True
-            else:
-                console.print(Panel(
-                    f"[bold red]❌ [AVAILABILITY ERROR][/bold red]\n"
-                    f"Model [cyan]{model_name}[/cyan] not found on [yellow]{host}[/yellow].\n\n"
-                    f"[dim]Available models: {', '.join(model_names[:5])}{'...' if len(model_names) > 5 else ''}[/dim]",
-                    border_style="red",
-                    expand=False
-                ))
-                return False
-                
+
+            console.print(Panel(
+                f"[bold red][AVAILABILITY ERROR][/bold red]\n"
+                f"Model [cyan]{model_name}[/cyan] not found on [yellow]{host}[/yellow].\n\n"
+                f"[dim]Available models: {', '.join(model_names[:5])}{'...' if len(model_names) > 5 else ''}[/dim]",
+                border_style="red",
+                expand=False,
+            ))
+            return False
     except Exception as e:
-        console.print(Panel(f"[bold red]❌ Unexpected Validation Error:[/bold red]\n{e}", border_style="red", expand=False))
+        console.print(Panel(f"[bold red]Unexpected Validation Error:[/bold red]\n{e}", border_style="red", expand=False))
         return False
+
 
 def check_for_env_config() -> bool:
     """Checks for .env file, shows values, prompts user, and VALIDATES if confirmed."""
@@ -129,13 +173,32 @@ def check_for_env_config() -> bool:
         
         if Confirm.ask("\nImport settings from .env and skip wizard?", default=True):
             # NEW: Post-Confirmation Validation
-            main_ok = validate_model_on_host(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'], "Main (Chat)")
-            embed_ok = validate_model_on_host(env_vars['RAG_EMBED_HOST'], env_vars['RAG_EMBED_MODEL'], "Embedding (RAG)")
-            
-            if main_ok and embed_ok:
-                set_main_model(env_vars['RAG_MAIN_HOST'], env_vars['RAG_MAIN_MODEL'])
-                set_embedding_model(env_vars['RAG_EMBED_HOST'], env_vars['RAG_EMBED_MODEL'])
-                set_rag_workflow(workflow)
+            main_ok = validate_model_on_host(
+                env_vars['RAG_MAIN_HOST'],
+                env_vars['RAG_MAIN_MODEL'],
+                "Main (Chat)",
+                engine=env_vars.get("RAG_MAIN_ENGINE", "ollama"),
+                api_key=env_vars.get("RAG_MAIN_API_KEY", ""),
+            )
+            embed_ok = validate_model_on_host(
+                env_vars['RAG_EMBED_HOST'],
+                env_vars['RAG_EMBED_MODEL'],
+                "Embedding (RAG)",
+                engine=env_vars.get("RAG_EMBED_ENGINE", "ollama"),
+                api_key=env_vars.get("RAG_EMBED_API_KEY", ""),
+            )
+            normalize_ok = True
+            if env_vars.get("RAG_NORMALIZATION_HOST") and env_vars.get("RAG_NORMALIZATION_MODEL"):
+                normalize_ok = validate_model_on_host(
+                    env_vars["RAG_NORMALIZATION_HOST"],
+                    env_vars["RAG_NORMALIZATION_MODEL"],
+                    "Normalization (Ingestion)",
+                    engine=env_vars.get("RAG_NORMALIZATION_ENGINE", env_vars.get("RAG_MAIN_ENGINE", "ollama")),
+                    api_key=env_vars.get("RAG_NORMALIZATION_API_KEY", env_vars.get("RAG_MAIN_API_KEY", "")),
+                )
+
+            if main_ok and embed_ok and normalize_ok:
+                reload_config()
                 console.print("[bold green]Configuration Loaded from .env and Verified![/bold green]")
                 time.sleep(1) # Visual feedback
                 return True

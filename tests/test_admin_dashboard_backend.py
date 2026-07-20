@@ -37,7 +37,7 @@ def test_model_health_reuses_cached_probe_within_ttl(monkeypatch):
 
     calls = []
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, **_kwargs):
         calls.append((url, timeout))
         return FakeResponse()
 

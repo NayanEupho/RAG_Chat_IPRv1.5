@@ -52,8 +52,19 @@ def main():
     # Pass config to uvicorn subprocess via environment variables
     os.environ["RAG_MAIN_HOST"] = config.main_model.host
     os.environ["RAG_MAIN_MODEL"] = config.main_model.model_name
+    os.environ["RAG_MAIN_ENGINE"] = config.main_engine
+    os.environ["RAG_MAIN_API_KEY"] = config.main_model.api_key
     os.environ["RAG_EMBED_HOST"] = config.embedding_model.host
     os.environ["RAG_EMBED_MODEL"] = config.embedding_model.model_name
+    os.environ["RAG_EMBED_ENGINE"] = config.embedding_engine
+    os.environ["RAG_EMBED_API_KEY"] = config.embedding_model.api_key
+    if config.normalization_model:
+        os.environ["RAG_NORMALIZATION_HOST"] = config.normalization_model.host
+        os.environ["RAG_NORMALIZATION_MODEL"] = config.normalization_model.model_name
+        os.environ["RAG_NORMALIZATION_API_KEY"] = config.normalization_model.api_key
+    os.environ["RAG_NORMALIZATION_ENGINE"] = config.normalization_engine
+    os.environ["RAG_VLM_ENGINE"] = config.vlm_engine
+    os.environ["RAG_VLM_API_KEY"] = config.vlm_api_key
     os.environ["RAG_WORKFLOW"] = config.rag_workflow
     os.environ["INGEST_FORCE_CPU"] = str(config.ingest_force_cpu).lower()
     os.environ["INGEST_LLM_NORMALIZE"] = str(config.ingest_llm_normalize).lower()

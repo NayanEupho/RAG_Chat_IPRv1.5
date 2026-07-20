@@ -5,20 +5,26 @@ Handles application-wide settings using Pydantic for validation.
 Supports loading from environment variables and provides a singleton configuration instance.
 """
 
-from pydantic import BaseModel, field_validator
-from typing import Optional
-import os
 import logging
+import os
 import threading
+from typing import Optional
+
 from dotenv import load_dotenv
+from pydantic import BaseModel, field_validator
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
 class OllamaConfig(BaseModel):
-    """Configuration for a specific Ollama host and model."""
+    """Configuration for a specific model host and model.
+
+    The name is kept for backward compatibility with existing tests and call
+    sites. Non-Ollama engines use the same shape with an optional API key.
+    """
     host: str
     model_name: str
+    api_key: str = ""
 
 class AppConfig(BaseModel):
     """
@@ -68,6 +74,7 @@ class AppConfig(BaseModel):
     vlm_timeout_seconds: int = 300
     vlm_concurrency: int = 1
     vlm_retries: int = 1
+    vlm_api_key: str = ""
 
     # Model Context Window (for dynamic token budget)
     # Auto-detected from Ollama model metadata at startup, override via MODEL_CONTEXT_WINDOW env var
@@ -118,20 +125,25 @@ def get_config() -> AppConfig:
     if _env_applied:
         return _runtime_config
 
-    # If not configured in memory, check env vars (in case of uvicorn worker)
-    if not _runtime_config.is_configured:
-        main_host = os.getenv("RAG_MAIN_HOST")
-        main_model = os.getenv("RAG_MAIN_MODEL")
-        embed_host = os.getenv("RAG_EMBED_HOST")
-        embed_model = os.getenv("RAG_EMBED_MODEL")
-        if main_host and main_model and embed_host and embed_model:
-            _runtime_config.main_model = OllamaConfig(host=main_host, model_name=main_model)
-            _runtime_config.embedding_model = OllamaConfig(host=embed_host, model_name=embed_model)
+    # Apply explicit env model endpoints on every reload. If env values are absent,
+    # preserve any manually configured runtime values used by tests/wizard code.
+    main_host = os.getenv("RAG_MAIN_HOST")
+    main_model = os.getenv("RAG_MAIN_MODEL")
+    main_api_key = os.getenv("RAG_MAIN_API_KEY", "")
+    if main_host and main_model:
+        _runtime_config.main_model = OllamaConfig(host=main_host, model_name=main_model, api_key=main_api_key)
+
+    embed_host = os.getenv("RAG_EMBED_HOST")
+    embed_model = os.getenv("RAG_EMBED_MODEL")
+    embed_api_key = os.getenv("RAG_EMBED_API_KEY", "")
+    if embed_host and embed_model:
+        _runtime_config.embedding_model = OllamaConfig(host=embed_host, model_name=embed_model, api_key=embed_api_key)
 
     normalize_host = os.getenv("RAG_NORMALIZATION_HOST")
     normalize_model = os.getenv("RAG_NORMALIZATION_MODEL")
+    normalize_api_key = os.getenv("RAG_NORMALIZATION_API_KEY", "")
     if normalize_host and normalize_model:
-        _runtime_config.normalization_model = OllamaConfig(host=normalize_host, model_name=normalize_model)
+        _runtime_config.normalization_model = OllamaConfig(host=normalize_host, model_name=normalize_model, api_key=normalize_api_key)
     elif not _runtime_config.normalization_model and _runtime_config.main_model:
         _runtime_config.normalization_model = _runtime_config.main_model
     
@@ -197,6 +209,7 @@ def get_config() -> AppConfig:
     # VLM Sync
     _runtime_config.vlm_host = os.getenv("RAG_VLM_HOST", _runtime_config.vlm_host)
     _runtime_config.vlm_model = os.getenv("RAG_VLM_MODEL", _runtime_config.vlm_model)
+    _runtime_config.vlm_api_key = os.getenv("RAG_VLM_API_KEY", _runtime_config.vlm_api_key)
     _runtime_config.vlm_prompt = os.getenv("RAG_VLM_PROMPT", _runtime_config.vlm_prompt)
     try:
         _runtime_config.vlm_dpi = int(os.getenv("RAG_VLM_DPI", str(_runtime_config.vlm_dpi)))

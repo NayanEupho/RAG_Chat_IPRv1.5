@@ -1,9 +1,9 @@
 """
 Runtime model health checks.
 
-Readiness is based on Ollama /api/ps so status polling never triggers a
-generation or embedding request. Warmup paths are responsible for loading
-models opportunistically.
+Readiness is provider-aware and intentionally avoids generation/embedding
+requests. Ollama uses /api/tags and /api/ps. OpenAI-compatible providers such
+as LiteLLM use /v1/models; they do not expose GPU-residency, so loaded=None.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from backend.config import OllamaConfig, get_config
+from backend.llm.client import normalize_engine
 
 
 class ModelUnavailableError(RuntimeError):
@@ -36,6 +37,7 @@ class ModelProbeResult:
     latency_ms: int
     checked_at: str
     error: str | None = None
+    engine: str = "ollama"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -89,13 +91,6 @@ def _cached_snapshot(*, cached: bool = True, refresh_in_progress: bool = False) 
     return snapshot
 
 
-def _snapshot_rag_ready(snapshot: dict[str, Any] | None) -> bool:
-    if not snapshot:
-        return False
-    embedding = snapshot.get("embedding_model") or {}
-    return bool(snapshot.get("rag_available") and embedding.get("query_ready"))
-
-
 def _snapshot_embedding_ready(snapshot: dict[str, Any] | None) -> bool:
     if not snapshot:
         return False
@@ -106,14 +101,11 @@ def _snapshot_embedding_ready(snapshot: dict[str, Any] | None) -> bool:
 def _model_matches(configured_name: str, discovered_name: str) -> bool:
     configured = configured_name.strip()
     discovered = discovered_name.strip()
-    return (
-        configured == discovered
-        or configured.split(":")[0] == discovered.split(":")[0]
-    )
+    return configured == discovered or configured.split(":")[0] == discovered.split(":")[0]
 
 
 async def _fetch_ollama_models(host: str, endpoint: str) -> list[dict[str, Any]]:
-    async with httpx.AsyncClient(timeout=_probe_timeout_seconds()) as client:
+    async with httpx.AsyncClient(timeout=_probe_timeout_seconds(), trust_env=False) as client:
         response = await client.get(f"{host.rstrip('/')}{endpoint}")
         response.raise_for_status()
         data = response.json()
@@ -130,9 +122,23 @@ async def _is_loaded_best_effort(host: str, model_name: str) -> bool | None:
     return any(_model_matches(model_name, str(model.get("name", ""))) for model in models)
 
 
-async def _probe_model(role: str, model: OllamaConfig | None) -> ModelProbeResult:
+async def _is_openai_model_listed(host: str, model_name: str, api_key: str = "") -> bool:
+    base = host.rstrip("/")
+    base = base if base.endswith("/v1") else f"{base}/v1"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(timeout=_probe_timeout_seconds(), trust_env=False) as client:
+        response = await client.get(f"{base}/models", headers=headers)
+        response.raise_for_status()
+        data = response.json()
+    models = data.get("data", []) if isinstance(data, dict) else []
+    names = [str(model.get("id") or model.get("model") or "") for model in models if isinstance(model, dict)]
+    return any(_model_matches(model_name, name) for name in names)
+
+
+async def _probe_model(role: str, model: OllamaConfig | None, engine: str = "ollama") -> ModelProbeResult:
     start = time.monotonic()
     checked_at = _utc_now()
+    normalized_engine = normalize_engine(engine)
     if model is None:
         return ModelProbeResult(
             role=role,
@@ -145,6 +151,7 @@ async def _probe_model(role: str, model: OllamaConfig | None) -> ModelProbeResul
             latency_ms=0,
             checked_at=checked_at,
             error="Model is not configured",
+            engine=normalized_engine,
         )
 
     listed = False
@@ -152,20 +159,30 @@ async def _probe_model(role: str, model: OllamaConfig | None) -> ModelProbeResul
     query_ready = False
     error: str | None = None
     try:
-        listed_result, loaded_result = await asyncio.gather(
-            _is_listed(model.host, model.model_name),
-            _is_loaded_best_effort(model.host, model.model_name),
-            return_exceptions=True,
-        )
-        listed = False if isinstance(listed_result, Exception) else bool(listed_result)
-        loaded = False if isinstance(loaded_result, Exception) else bool(loaded_result)
-        if loaded:
-            query_ready = True
-            error = None
-        elif listed:
-            error = f"Model '{model.model_name}' is listed but not loaded"
+        if normalized_engine == "ollama":
+            listed_result, loaded_result = await asyncio.gather(
+                _is_listed(model.host, model.model_name),
+                _is_loaded_best_effort(model.host, model.model_name),
+                return_exceptions=True,
+            )
+            listed = False if isinstance(listed_result, Exception) else bool(listed_result)
+            loaded = False if isinstance(loaded_result, Exception) else bool(loaded_result)
+            if loaded:
+                query_ready = True
+                error = None
+            elif listed:
+                error = f"Model '{model.model_name}' is listed but not loaded"
+            else:
+                error = f"Model '{model.model_name}' is not listed or loaded on host"
+        elif normalized_engine == "openai-compatible":
+            listed = await _is_openai_model_listed(model.host, model.model_name, model.api_key)
+            loaded = None
+            query_ready = listed
+            if not listed:
+                error = f"Model '{model.model_name}' is not listed on OpenAI-compatible endpoint"
         else:
-            error = f"Model '{model.model_name}' is not listed or loaded on host"
+            loaded = None
+            error = f"Unsupported model engine: {engine}"
     except Exception as exc:
         error = str(exc) or exc.__class__.__name__
 
@@ -180,6 +197,7 @@ async def _probe_model(role: str, model: OllamaConfig | None) -> ModelProbeResul
         latency_ms=int((time.monotonic() - start) * 1000),
         checked_at=checked_at,
         error=error,
+        engine=normalized_engine,
     )
 
 
@@ -224,8 +242,8 @@ async def get_model_health(force: bool = False) -> dict[str, Any]:
 
         cfg = get_config()
         main, embedding = await asyncio.gather(
-            _probe_model("main", cfg.main_model),
-            _probe_model("embedding", cfg.embedding_model),
+            _probe_model("main", cfg.main_model, cfg.main_engine),
+            _probe_model("embedding", cfg.embedding_model, cfg.embedding_engine),
         )
         _health_cache = _build_snapshot(main, embedding, cached=False)
         _health_cache_at = time.monotonic()
@@ -281,9 +299,7 @@ async def ensure_rag_ready() -> dict[str, Any]:
         return snapshot
 
     reason = embedding.get("error") or "Embedding model is not query-ready"
-    raise ModelUnavailableError(
-        f"RAG is unavailable because the embedding model is not query-ready: {reason}"
-    )
+    raise ModelUnavailableError(f"RAG is unavailable because the embedding model is not query-ready: {reason}")
 
 
 def invalidate_model_health_cache() -> None:

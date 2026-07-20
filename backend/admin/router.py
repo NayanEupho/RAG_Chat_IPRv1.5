@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
@@ -14,17 +14,22 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
-from backend.admin.db import get_connection
-from backend.admin import files
+from backend.admin import files, vector_inspector, warehouse
 from backend.admin.auth import authenticate_admin, normalize_email
-from backend.admin.events import event_hub
-from backend.admin.inventory import inventory_summary, iter_generated_chunks, list_artifact_runs, list_generated_files, list_source_files
-from backend.admin.repository import new_id, repo
-from backend.admin import warehouse
 from backend.admin.chunk_inventory import list_chroma_chunks
+from backend.admin.db import get_connection
+from backend.admin.events import event_hub
+from backend.admin.inventory import (
+    inventory_summary,
+    iter_generated_chunks,
+    list_artifact_runs,
+    list_generated_files,
+    list_source_files,
+)
+from backend.admin.repository import new_id, repo
 from backend.admin.schemas import (
-    ApproveReviewRequest,
     AdminLoginRequest,
+    ApproveReviewRequest,
     BatchConfig,
     BatchConfigPatch,
     BatchStatus,
@@ -40,13 +45,12 @@ from backend.admin.schemas import (
     SaveReviewRequest,
     SelectVariantRequest,
     TriggerNormalizeRequest,
-    VectorProbeRequest,
     VariantStatus,
+    VectorProbeRequest,
 )
 from backend.admin.worker import admin_worker
-from backend.admin import vector_inspector
-from backend.ingestion.parsers import normalize_parser_mode, is_supported_parser
-
+from backend.ingestion.parsers import is_supported_parser, normalize_parser_mode
+from backend.llm.client import normalize_engine
 
 router = APIRouter()
 _MODEL_HEALTH_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
@@ -91,10 +95,16 @@ def _model_health_cache_key(model, engine: str) -> tuple[str, str]:
     )
 
 
+def _model_matches(configured_name: str, discovered_name: str) -> bool:
+    configured = configured_name.strip()
+    discovered = discovered_name.strip()
+    return configured == discovered or configured.split(":")[0] == discovered.split(":")[0]
+
+
 def _probe_ollama_tags(model) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        response = httpx.get(f"{str(model.host).rstrip('/')}/api/tags", timeout=_model_health_timeout_seconds())
+        response = httpx.get(f"{str(model.host).rstrip('/')}/api/tags", timeout=_model_health_timeout_seconds(), trust_env=False)
         response.raise_for_status()
         payload = response.json()
         names = {item.get("name") for item in payload.get("models", []) if isinstance(item, dict)}
@@ -104,10 +114,31 @@ def _probe_ollama_tags(model) -> dict[str, Any]:
         return {"error": str(exc), "latency_ms": int((time.monotonic() - started) * 1000), "names": set()}
 
 
+def _probe_openai_models(model) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        base = str(model.host).rstrip("/")
+        base = base if base.endswith("/v1") else f"{base}/v1"
+        headers = {"Authorization": f"Bearer {model.api_key}"} if getattr(model, "api_key", "") else {}
+        response = httpx.get(f"{base}/models", headers=headers, timeout=_model_health_timeout_seconds(), trust_env=False)
+        response.raise_for_status()
+        payload = response.json()
+        names = {
+            item.get("id") or item.get("model")
+            for item in payload.get("data", [])
+            if isinstance(item, dict)
+        }
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return {"error": None, "latency_ms": latency_ms, "names": names}
+    except Exception as exc:
+        return {"error": str(exc), "latency_ms": int((time.monotonic() - started) * 1000), "names": set()}
+
+
 def _model_health(model, engine: str, configured: bool) -> dict[str, Any]:
     if not configured or not model:
         return {"status": "offline", "error": "Model is not configured.", "latency_ms": None, "cached": False, "checked_at": None}
-    if (engine or "ollama").lower() != "ollama":
+    normalized_engine = normalize_engine(engine)
+    if normalized_engine not in {"ollama", "openai-compatible"}:
         return {"status": "unknown", "error": f"Health check for {engine} is not implemented.", "latency_ms": None, "cached": False, "checked_at": None}
 
     key = _model_health_cache_key(model, engine)
@@ -123,7 +154,8 @@ def _model_health(model, engine: str, configured: bool) -> dict[str, Any]:
 
     if not tag_result:
         checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        tag_result = {**_probe_ollama_tags(model), "cached": False, "checked_at": checked_at}
+        probe = _probe_ollama_tags if normalized_engine == "ollama" else _probe_openai_models
+        tag_result = {**probe(model), "cached": False, "checked_at": checked_at}
         with _MODEL_HEALTH_LOCK:
             _MODEL_HEALTH_CACHE[key] = (now, tag_result)
 
@@ -135,7 +167,7 @@ def _model_health(model, engine: str, configured: bool) -> dict[str, Any]:
             "cached": tag_result["cached"],
             "checked_at": tag_result["checked_at"],
         }
-    if model.model_name in tag_result["names"]:
+    if any(_model_matches(model.model_name, str(name or "")) for name in tag_result["names"]):
         return {
             "status": "online",
             "error": None,
@@ -145,7 +177,7 @@ def _model_health(model, engine: str, configured: bool) -> dict[str, Any]:
         }
     return {
         "status": "offline",
-        "error": f"Host is reachable, but model '{model.model_name}' was not found in Ollama tags.",
+        "error": f"Host is reachable, but model '{model.model_name}' was not found in {normalized_engine} model list.",
         "latency_ms": tag_result["latency_ms"],
         "cached": tag_result["cached"],
         "checked_at": tag_result["checked_at"],
@@ -274,6 +306,7 @@ def runtime_config():
             "display_name": model.model_name if model else "Not configured",
             "engine": engine or "ollama",
             "configured": is_configured,
+            "api_key_configured": bool(getattr(model, "api_key", "")),
             "health_status": health["status"],
             "health_error": health["error"],
             "health_latency_ms": health["latency_ms"],
@@ -286,7 +319,7 @@ def runtime_config():
     if cfg.vlm_model and str(cfg.vlm_model).lower() != "false":
         from backend.config import OllamaConfig
 
-        vlm_model = OllamaConfig(host=cfg.vlm_host, model_name=cfg.vlm_model)
+        vlm_model = OllamaConfig(host=cfg.vlm_host, model_name=cfg.vlm_model, api_key=cfg.vlm_api_key)
     parser_options = [
         {
             "value": "auto",
@@ -342,6 +375,7 @@ def runtime_config():
                 "display_name": normalization_model.model_name if normalization_model else "Not configured",
                 "engine": cfg.normalization_engine,
                 "configured": bool(normalization_model),
+                "api_key_configured": bool(getattr(normalization_model, "api_key", "")),
             },
             "embedding": {
                 "model_id": cfg.embedding_model.model_name if cfg.embedding_model else None,
@@ -349,6 +383,7 @@ def runtime_config():
                 "display_name": cfg.embedding_model.model_name if cfg.embedding_model else "Not configured",
                 "engine": cfg.embedding_engine,
                 "configured": bool(cfg.embedding_model),
+                "api_key_configured": bool(getattr(cfg.embedding_model, "api_key", "")),
             },
             "models": models,
             "parsing_mode": cfg.parsing_mode,
@@ -358,6 +393,7 @@ def runtime_config():
                 "endpoint": cfg.vlm_host,
                 "engine": cfg.vlm_engine,
                 "configured": bool(vlm_model),
+                "api_key_configured": bool(getattr(vlm_model, "api_key", "")),
             },
         }
     )

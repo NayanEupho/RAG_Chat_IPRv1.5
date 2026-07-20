@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List
 import ollama
 
 from backend.config import OllamaConfig, get_config
+from backend.llm.client import OpenAICompatibleSyncClient, normalize_engine
 
 logger = logging.getLogger("rag_chat_ipr.ingestion.normalizers")
 _CLIENT_CACHE: dict[tuple[int, str], Any] = {}
@@ -100,7 +101,7 @@ class LlmMarkdownNormalizer:
             num_predict=int(os.getenv("INGEST_NORMALIZE_NUM_PREDICT", "12000")),
             temperature=float(os.getenv("INGEST_NORMALIZE_TEMPERATURE", "0")),
         )
-        self.client_factory = client_factory or ollama.Client
+        self.client_factory = client_factory
 
     def normalize(
         self,
@@ -122,7 +123,7 @@ class LlmMarkdownNormalizer:
         batch_manifests = []
         previous_tail = ""
 
-        client = self._client_for_host(normalization_model.host)
+        client = self._client_for_model(normalization_model, cfg.normalization_engine)
         rules = QNA_NORMALIZATION_RULES if doc_type == "qna" else GENERAL_NORMALIZATION_RULES
 
         for idx, batch_text in enumerate(batches, start=1):
@@ -191,15 +192,24 @@ class LlmMarkdownNormalizer:
             model_name = model_config.get("model_id") or model_config.get("model_name")
             if not host or not model_name:
                 raise ValueError("LLM normalization model config must include endpoint and model_id")
-            return OllamaConfig(host=str(host), model_name=str(model_name))
+            api_key = str(model_config.get("api_key") or getattr(cfg.normalization_model or cfg.main_model, "api_key", ""))
+            return OllamaConfig(host=str(host), model_name=str(model_name), api_key=api_key)
         return cfg.normalization_model or cfg.main_model
 
-    def _client_for_host(self, host: str) -> Any:
-        key = (id(self.client_factory), host)
+    def _client_for_model(self, model: OllamaConfig, engine: str) -> Any:
+        normalized_engine = normalize_engine(engine)
+        key = (id(self.client_factory), normalized_engine, model.host, model.model_name, bool(model.api_key))
         with _CLIENT_CACHE_LOCK:
             client = _CLIENT_CACHE.get(key)
             if client is None:
-                client = self.client_factory(host=host)
+                if self.client_factory is not None:
+                    client = self.client_factory(host=model.host)
+                elif normalized_engine == "ollama":
+                    client = ollama.Client(host=model.host)
+                elif normalized_engine == "openai-compatible":
+                    client = OpenAICompatibleSyncClient(model)
+                else:
+                    raise ValueError(f"Unsupported normalization model engine: {engine}")
                 _CLIENT_CACHE[key] = client
             return client
 

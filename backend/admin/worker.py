@@ -12,8 +12,13 @@ from typing import Any, Optional
 from backend.admin import files
 from backend.admin.events import event_hub
 from backend.admin.repository import now_iso, repo
-from backend.admin.schemas import BatchStatus, DocumentStatus, JobStatus, PipelineStage, VariantStatus
-
+from backend.admin.schemas import (
+    BatchStatus,
+    DocumentStatus,
+    JobStatus,
+    PipelineStage,
+    VariantStatus,
+)
 
 _EMBED_CLIENTS: dict[str, Any] = {}
 _EMBED_CLIENT_LOCK = threading.Lock()
@@ -525,7 +530,9 @@ class AdminWorker:
             config = get_config()
             if not config.embedding_model:
                 raise ValueError("Embedding Model not configured")
-            client = get_embed_client(config.embedding_model.host)
+            from backend.llm.client import OllamaClientWrapper
+
+            client = OllamaClientWrapper.get_sync_embedding_client()
             embedding_model = config.embedding_model.model_name
             embeddings = embed_text_batches(client, embedding_model, texts)
             if len(embeddings) != len(texts):
