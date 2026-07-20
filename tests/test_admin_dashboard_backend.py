@@ -457,7 +457,6 @@ def test_worker_fails_chunk_job_when_no_chunks_are_produced(isolated_admin, monk
 
 
 def test_worker_chunks_approved_markdown_without_document_processor(isolated_admin, monkeypatch):
-    from backend.admin import worker as worker_module
     from backend.admin.worker import AdminWorker
     from backend.ingestion.processor import DocumentProcessor
     from backend.rag import store as store_module
@@ -505,7 +504,7 @@ def test_worker_chunks_approved_markdown_without_document_processor(isolated_adm
     )
 
     monkeypatch.setattr(store_module, "get_vector_store", lambda: store)
-    monkeypatch.setattr(worker_module, "get_embed_client", lambda _host: FakeClient())
+    monkeypatch.setattr("backend.llm.client.OllamaClientWrapper.get_sync_embedding_client", lambda: FakeClient())
     monkeypatch.setattr(DocumentProcessor, "__init__", lambda self: (_ for _ in ()).throw(AssertionError("DocumentProcessor should not be initialized for markdown chunking")))
 
     AdminWorker()._chunk(job["job_id"], job)

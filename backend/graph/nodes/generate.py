@@ -198,6 +198,95 @@ def _cache_signature(final_messages: list[dict]) -> str:
     return hashlib.md5(prefix.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
+
+def _message_to_payload(message) -> dict[str, str]:
+    if isinstance(message, SystemMessage):
+        role = "system"
+    elif isinstance(message, HumanMessage):
+        role = "user"
+    else:
+        role = "assistant"
+    return {"role": role, "content": message.content}
+
+
+def _split_latest_user_message(messages: list, latest_query: str) -> tuple[list, str]:
+    if messages and isinstance(messages[-1], HumanMessage):
+        return list(messages[:-1]), messages[-1].content
+    return list(messages), latest_query
+
+
+def _deterministic_retrieval_block(
+    *,
+    context_block: str,
+    intent: str,
+    targeted_docs: list[str],
+    semantic_maps: list[dict],
+    wants_detail: bool,
+) -> str:
+    lines = ["[RETRIEVAL CONTEXT]", f"intent={intent}"]
+
+    if semantic_maps:
+        lines.append("search_strategy:")
+        for item in semantic_maps:
+            query = str(item.get("query") or "").strip()
+            target = str(item.get("target") or "Global Knowledge").strip()
+            lines.append(f"- query={query}; target={target}")
+    elif targeted_docs:
+        lines.append("targeted_documents:")
+        for target in targeted_docs:
+            lines.append(f"- {target}")
+
+    if wants_detail:
+        lines.extend([
+            "answer_depth=detailed",
+            "Provide a complete structured answer with relevant facts, exceptions, and citations from the retrieved evidence.",
+        ])
+
+    if len(targeted_docs) > 1:
+        lines.extend([
+            "multi_document=true",
+            "Cover each targeted document in a clearly labeled section before giving any combined comparison.",
+        ])
+
+    lines.extend(["<docs>", context_block.strip(), "</docs>"])
+    return "\n".join(lines).strip()
+
+
+def _build_final_messages(
+    *,
+    prepared_msgs: list,
+    latest_query: str,
+    intent: str,
+    mode: str,
+    context_block: str = "",
+    targeted_docs: list[str] | None = None,
+    semantic_maps: list[dict] | None = None,
+    wants_detail: bool = False,
+) -> list[dict[str, str]]:
+    history_messages, current_query = _split_latest_user_message(prepared_msgs, latest_query)
+    final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
+    final_messages.extend(_message_to_payload(message) for message in history_messages)
+
+    control_lines = ["[SESSION CONTROL]", f"mode={mode}", f"intent={intent}"]
+    if wants_detail:
+        control_lines.append("answer_depth=detailed")
+    final_messages.append({"role": "system", "content": "\n".join(control_lines)})
+
+    if intent in ["direct_rag", "specific_doc_rag"]:
+        final_messages.append({
+            "role": "system",
+            "content": _deterministic_retrieval_block(
+                context_block=context_block,
+                intent=intent,
+                targeted_docs=targeted_docs or [],
+                semantic_maps=semantic_maps or [],
+                wants_detail=wants_detail,
+            ),
+        })
+
+    final_messages.append({"role": "user", "content": current_query})
+    return final_messages
+
 async def _update_summary(prev_summary: str, query: str, answer: str) -> str:
     try:
         client = OllamaClientWrapper.get_chat_model()
@@ -269,56 +358,23 @@ async def generate_answer(state: AgentState):
     # The model is instructed to be crisp by default; if a detailed answer is needed,
     # it's signaled via the user message content rather than a dynamic style prefix.
 
-    if intent in ["direct_rag", "specific_doc_rag"]:
-        targeting_context = ""
-        semantic_maps = state.get('semantic_queries', [])
-        if semantic_maps:
-            map_str = "\n".join([f"- Querying '{s['query']}' against '{s['target'] if s['target'] else 'Global Knowledge'}'" for s in semantic_maps])
-            targeting_context = f"\n[SEARCH STRATEGY] I segmented your request as follows:\n{map_str}\n"
-        elif intent == "specific_doc_rag" and state.get('targeted_docs'):
-            targeting_list = ", ".join(state['targeted_docs'])
-            targeting_context = f"\n[IMPORTANT] The user specifically requested info from: {targeting_list}."
+    if intent in ["direct_rag", "specific_doc_rag"] and not context_block.strip():
+        context_block = (
+            "No sufficiently relevant knowledge-base chunks were retrieved for this query. "
+            "Do not answer from general knowledge. State that the requested information is not in the indexed files, "
+            "and ask the user to upload or target the relevant document."
+        )
 
-        if not context_block.strip():
-            context_block = (
-                "No sufficiently relevant knowledge-base chunks were retrieved for this query. "
-                "Do not answer from general knowledge. State that the requested information is not in the indexed files, "
-                "and ask the user to upload or target the relevant document."
-            )
-
-        detail_instruction = ""
-        if wants_detail:
-            detail_instruction = (
-                "\n[ANSWER DEPTH]\n"
-                "The user explicitly asked for detail. Provide a complete structured answer with the relevant facts, "
-                "steps, exceptions, and citations from the retrieved evidence. Do not stay artificially brief.\n"
-            )
-        multi_doc_instruction = ""
-        targeted_docs = state.get("targeted_docs") or []
-        if len(targeted_docs) > 1:
-            multi_doc_instruction = (
-                "\n[MULTI-DOCUMENT REQUIREMENT]\n"
-                f"The user targeted multiple documents: {', '.join(targeted_docs)}. Cover each targeted document "
-                "in a clearly labeled section before giving any combined comparison. If evidence for one target is thin, "
-                "state the specific evidence that was retrieved instead of ignoring that document.\n"
-            )
-
-        rag_prompt = f"""{targeting_context}{detail_instruction}{multi_doc_instruction}
-<docs>
-{context_block}
-</docs>
-Q: {latest_query}
-"""
-        final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
-        final_messages.append({"role": "user", "content": rag_prompt})
-    else:
-        final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
-        for m in prepared_msgs:
-            if isinstance(m, SystemMessage):
-                role = "system"
-            else:
-                role = "user" if isinstance(m, HumanMessage) else "assistant"
-            final_messages.append({"role": role, "content": m.content})
+    final_messages = _build_final_messages(
+        prepared_msgs=prepared_msgs,
+        latest_query=latest_query,
+        intent=intent,
+        mode=mode,
+        context_block=context_block,
+        targeted_docs=state.get("targeted_docs") or [],
+        semantic_maps=state.get("semantic_queries", []),
+        wants_detail=wants_detail,
+    )
 
     logger.info(f"[GENERATE] Prefix cache signature: {_cache_signature(final_messages)} | messages={len(final_messages)} | summary={bool(next_summary)}")
 
