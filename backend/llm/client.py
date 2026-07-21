@@ -97,6 +97,9 @@ class OpenAICompatibleChatModel:
         self.base_url = _openai_base_url(endpoint.host)
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.enable_json_response_format = (
+            os.getenv("RAG_OPENAI_COMPAT_JSON_RESPONSE_FORMAT", "false").strip().lower() == "true"
+        )
         self._sync_http_client = httpx.Client(timeout=None, trust_env=False)
         self._async_http_client = httpx.AsyncClient(timeout=None, trust_env=False)
         self._chat = ChatOpenAI(
@@ -118,13 +121,13 @@ class OpenAICompatibleChatModel:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
-        if response_format == "json":
+        if response_format == "json" and self.enable_json_response_format:
             payload["response_format"] = {"type": "json_object"}
         return payload
 
     async def ainvoke(self, messages: Iterable[Any], **kwargs: Any) -> AIMessage:
         chat = self._chat
-        if kwargs.get("format") == "json":
+        if kwargs.get("format") == "json" and self.enable_json_response_format:
             chat = chat.bind(response_format={"type": "json_object"})
         return await chat.ainvoke(list(messages))
 

@@ -13,6 +13,8 @@ services:
       - RAG_MAIN_MODEL=qwen2.5-7b
       - RAG_MAIN_ENGINE=litellm
       - RAG_MAIN_API_KEY=sk-iVn5ImqP5MaBoDj9OLdK5Q
+      # vLLM 0.7.2 JSON response_format can fall back to xgrammar and crash; keep disabled unless verified.
+      - RAG_OPENAI_COMPAT_JSON_RESPONSE_FORMAT=false
       - RAG_EMBED_HOST=http://10.20.39.12:11438
       - RAG_EMBED_MODEL=embeddinggemma:300m
       - RAG_EMBED_ENGINE=ollama

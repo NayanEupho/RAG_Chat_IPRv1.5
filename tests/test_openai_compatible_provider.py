@@ -16,7 +16,8 @@ def test_openai_compatible_engine_aliases_normalize():
     assert normalize_engine("ollama") == "ollama"
 
 
-def test_openai_compatible_chat_payload_omits_ollama_only_fields():
+def test_openai_compatible_chat_payload_omits_ollama_only_fields(monkeypatch):
+    monkeypatch.delenv("RAG_OPENAI_COMPAT_JSON_RESPONSE_FORMAT", raising=False)
     endpoint = OllamaConfig(host="http://litellm.local:4000/v1", model_name="qwen2.5-7b", api_key="sk-test")
     model = OpenAICompatibleChatModel(endpoint=endpoint, temperature=0.2, max_tokens=256)
 
@@ -26,6 +27,7 @@ def test_openai_compatible_chat_payload_omits_ollama_only_fields():
             {"role": "user", "content": "Hello"},
         ],
         stream=True,
+        response_format="json",
     )
 
     assert payload["model"] == "qwen2.5-7b"
@@ -36,6 +38,21 @@ def test_openai_compatible_chat_payload_omits_ollama_only_fields():
     assert "keep_alive" not in payload
     assert "reasoning" not in payload
     assert "chat_template_kwargs" not in payload
+    assert "response_format" not in payload
+
+
+def test_openai_compatible_json_response_format_is_opt_in(monkeypatch):
+    monkeypatch.setenv("RAG_OPENAI_COMPAT_JSON_RESPONSE_FORMAT", "true")
+    endpoint = OllamaConfig(host="http://litellm.local:4000/v1", model_name="qwen2.5-7b", api_key="sk-test")
+    model = OpenAICompatibleChatModel(endpoint=endpoint, temperature=0.2, max_tokens=256)
+
+    payload = model._payload(
+        [{"role": "user", "content": "Return JSON."}],
+        stream=False,
+        response_format="json",
+    )
+
+    assert payload["response_format"] == {"type": "json_object"}
 
 
 def test_reload_config_reapplies_explicit_model_env(monkeypatch):

@@ -1,0 +1,56 @@
+#!/bin/bash
+
+source "$HOME/vllm-service/venv310/bin/activate"
+
+# Use specific GPUs
+export CUDA_VISIBLE_DEVICES=5,6
+
+# Performance optimizations for multi-GPU
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+
+MODEL_PATH="$HOME/vllm-service/models/qwen2.5-7b"
+LOG_DIR="$HOME/vllm-service/logs"
+LOG_FILE="$LOG_DIR/qwen2.5-7b.log"
+
+mkdir -p "$LOG_DIR"
+
+# Start vLLM with tool use enabled and increased context length.
+# The RAG backend uses OpenAI JSON mode for planner/router calls:
+# response_format={"type":"json_object"}.
+# vLLM 0.7.2 may default guided JSON decoding to xgrammar. If xgrammar's
+# compiled bindings do not match vLLM, the engine can die with:
+# AttributeError: TokenizerInfo has no attribute from_huggingface.
+# outlines is preferred, but vLLM 0.7.2 can still fall back to xgrammar for
+# json_object. Keep RAG_OPENAI_COMPAT_JSON_RESPONSE_FORMAT=false in the app
+# unless JSON-mode guided decoding is verified stable on this vLLM install.
+python -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL_PATH" \
+  --served-model-name qwen2.5-7b \
+  --tensor-parallel-size 2 \
+  --dtype float16 \
+  --gpu-memory-utilization 0.90 \
+  --max-model-len 32768 \
+  --max-num-seqs 16 \
+  --disable-custom-all-reduce \
+  --enforce-eager \
+  --guided-decoding-backend outlines \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes \
+  --host 0.0.0.0 \
+  --port 11434 \
+  > "$LOG_FILE" 2>&1 &
+
+echo "vLLM starting on port 11434... check logs with: tail -f $LOG_FILE"
+
+# Wait for vLLM startup
+sleep 15
+
+# Start reverse tunnel in background.
+# This exposes DGX local port 11434 on 10.20.39.12:11434 for LiteLLM/proxy use.
+ssh -fN \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=60 \
+  -o ServerAliveCountMax=3 \
+  -R 11434:localhost:11434 \
+  vkpatel@10.20.39.12
