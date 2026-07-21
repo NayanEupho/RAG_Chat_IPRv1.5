@@ -8,11 +8,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # IPR HPC Ollama inference endpoint
-      - RAG_MAIN_HOST=http://10.20.39.12:11438
-      - RAG_MAIN_MODEL=qwen3.6:35b-a3b-q8_0
-      - RAG_MAIN_ENGINE=ollama
-      - RAG_MAIN_API_KEY=
+      # Main inference endpoint. Production default uses LiteLLM/vLLM for chat; embeddings/normalization stay on Ollama.
+      - RAG_MAIN_HOST=http://10.20.20.90:4000/v1
+      - RAG_MAIN_MODEL=qwen2.5-7b
+      - RAG_MAIN_ENGINE=litellm
+      - RAG_MAIN_API_KEY=sk-iVn5ImqP5MaBoDj9OLdK5Q
       - RAG_EMBED_HOST=http://10.20.39.12:11438
       - RAG_EMBED_MODEL=embeddinggemma:300m
       - RAG_EMBED_ENGINE=ollama
@@ -28,8 +28,13 @@ services:
       - RAG_WORKFLOW=fused
       - RAG_RETRIEVAL_TOP_K=5
       - RAG_RETRIEVAL_MIN_SCORE=0.02
+      # MODEL_CONTEXT_WINDOW is the app-side RAG context budget for all engines.
+      # Ollama: also sent as num_ctx and can trigger model reload if it differs from the loaded context.
+      # vLLM/LiteLLM: does not resize vLLM; keep <= the server --max-model-len.
       - MODEL_CONTEXT_WINDOW=16384
       - RAG_CANDIDATE_MULTIPLIER=7
+      # Keep disabled by default based on 2026-07-21 TTFT/semantic benchmarks.
+      - RAG_SESSION_MEMORY_ENABLED=false
       - RAG_NO_THINKING=true
 
       # SAML Service Provider Config (This App)
