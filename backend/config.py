@@ -65,6 +65,7 @@ class AppConfig(BaseModel):
     retrieval_candidate_multiplier: int = 7
     retrieval_min_score: float = 0.05
     parsing_mode: str = "auto"
+    session_memory_enabled: bool = False
 
     # VLM Extraction Options (Optional)
     vlm_host: str = "http://localhost:11434"
@@ -205,6 +206,9 @@ def get_config() -> AppConfig:
         _runtime_config.retrieval_min_score = float(os.getenv("RAG_RETRIEVAL_MIN_SCORE", str(_runtime_config.retrieval_min_score)))
     except ValueError:
         logger.warning("Invalid RAG_RETRIEVAL_MIN_SCORE in env. Using default.")
+
+    session_memory_env = os.getenv("RAG_SESSION_MEMORY_ENABLED", "false")
+    _runtime_config.session_memory_enabled = session_memory_env.strip().lower() == "true"
 
     parsing_mode = os.getenv("RAG_PARSING_MODE", _runtime_config.parsing_mode).lower()
     if parsing_mode not in {"auto", "pymupdf", "pymupdf4llm", "docling", "docling_vision", "llm", "vision_llm"}:

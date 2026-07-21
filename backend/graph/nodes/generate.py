@@ -198,6 +198,135 @@ def _cache_signature(final_messages: list[dict]) -> str:
     return hashlib.md5(prefix.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
+def _recent_user_questions(messages: list, latest_query: str, limit: int = 2) -> list[str]:
+    questions = []
+    latest_norm = re.sub(r"\s+", " ", latest_query or "").strip()
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        content = re.sub(r"\s+", " ", message.content or "").strip()
+        if not content or content == latest_norm:
+            continue
+        questions.insert(0, content[:180])
+        if len(questions) >= limit:
+            break
+    return questions
+
+
+def _build_session_memory_block(state: AgentState, *, max_chars: int = 800) -> str:
+    lines = ["[SESSION MEMORY]"]
+    summary = re.sub(r"\s+", " ", (state.get("summary") or "").replace(_SUMMARY_PREFIX, "")).strip()
+    if summary:
+        lines.append(f"Stable summary: {summary[:360]}")
+
+    targets = state.get("targeted_docs") or state.get("last_targeted_docs") or []
+    if targets:
+        lines.append(f"Recent targets: {', '.join(str(t) for t in targets[:3])}")
+
+    latest_query = state.get("query", "")
+    questions = _recent_user_questions(state.get("messages", []), latest_query, limit=2)
+    if questions:
+        quoted = "; ".join(f'"{question}"' for question in questions)
+        lines.append(f"Recent user questions: {quoted}")
+
+    block = "\n".join(lines).strip()
+    if block == "[SESSION MEMORY]":
+        return ""
+    return block[:max_chars].rstrip()
+
+
+def _build_session_control_block(state: AgentState) -> str:
+    lines = [
+        "[SESSION CONTROL]",
+        f"mode={state.get('mode', 'auto')}",
+        f"intent={state.get('intent', 'unknown')}",
+    ]
+    context_action = state.get("context_action")
+    if context_action:
+        lines.append(f"context_action={context_action}")
+    targets = state.get("targeted_docs") or []
+    if targets:
+        lines.append(f"targeted_docs={', '.join(str(t) for t in targets[:5])}")
+    return "\n".join(lines)
+
+
+def _build_retrieval_context_block(context_block: str) -> str:
+    body = context_block.strip()
+    return f"[RETRIEVAL CONTEXT]\n<docs>\n{body}\n</docs>"
+
+
+def _estimated_message_tokens(final_messages: list[dict[str, str]]) -> int:
+    return sum(estimate_tokens(f"{message['role']}\n{message['content']}") for message in final_messages)
+
+
+def _build_legacy_rag_messages(
+    *,
+    state: AgentState,
+    context_block: str,
+    latest_query: str,
+    intent: str,
+    wants_detail: bool,
+) -> list[dict[str, str]]:
+    targeting_context = ""
+    semantic_maps = state.get('semantic_queries', [])
+    if semantic_maps:
+        map_str = "\n".join([f"- Querying '{s['query']}' against '{s['target'] if s['target'] else 'Global Knowledge'}'" for s in semantic_maps])
+        targeting_context = f"\n[SEARCH STRATEGY] I segmented your request as follows:\n{map_str}\n"
+    elif intent == "specific_doc_rag" and state.get('targeted_docs'):
+        targeting_list = ", ".join(state['targeted_docs'])
+        targeting_context = f"\n[IMPORTANT] The user specifically requested info from: {targeting_list}."
+
+    detail_instruction = ""
+    if wants_detail:
+        detail_instruction = (
+            "\n[ANSWER DEPTH]\n"
+            "The user explicitly asked for detail. Provide a complete structured answer with the relevant facts, "
+            "steps, exceptions, and citations from the retrieved evidence. Do not stay artificially brief.\n"
+        )
+    multi_doc_instruction = ""
+    targeted_docs = state.get("targeted_docs") or []
+    if len(targeted_docs) > 1:
+        multi_doc_instruction = (
+            "\n[MULTI-DOCUMENT REQUIREMENT]\n"
+            f"The user targeted multiple documents: {', '.join(targeted_docs)}. Cover each targeted document "
+            "in a clearly labeled section before giving any combined comparison. If evidence for one target is thin, "
+            "state the specific evidence that was retrieved instead of ignoring that document.\n"
+        )
+
+    rag_prompt = f"""{targeting_context}{detail_instruction}{multi_doc_instruction}
+<docs>
+{context_block}
+</docs>
+Q: {latest_query}
+"""
+    return [
+        {"role": "system", "content": _GENERATOR_SYSTEM_PROMPT},
+        {"role": "user", "content": rag_prompt},
+    ]
+
+
+def _build_compact_memory_rag_messages(
+    *,
+    state: AgentState,
+    context_block: str,
+    latest_query: str,
+) -> list[dict[str, str]]:
+    final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
+    memory_block = _build_session_memory_block(state)
+    if memory_block:
+        final_messages.append({"role": "system", "content": memory_block})
+    final_messages.append({"role": "system", "content": _build_session_control_block(state)})
+    final_messages.append({"role": "system", "content": _build_retrieval_context_block(context_block)})
+    final_messages.append({"role": "user", "content": latest_query})
+    return final_messages
+
+
+def _compact_rag_within_guardrail(legacy_messages: list[dict[str, str]], compact_messages: list[dict[str, str]]) -> bool:
+    legacy_tokens = _estimated_message_tokens(legacy_messages)
+    compact_tokens = _estimated_message_tokens(compact_messages)
+    return compact_tokens <= int(legacy_tokens * 1.15) and compact_tokens <= legacy_tokens + 300
+
+
 async def _update_summary(prev_summary: str, query: str, answer: str) -> str:
     try:
         client = OllamaClientWrapper.get_chat_model()
@@ -232,6 +361,7 @@ async def generate_answer(state: AgentState):
             return {"messages": [AIMessage(content=greeting_response)], "summary": prev_summary}
 
     client = OllamaClientWrapper.get_chat_model()
+    cfg = get_config()
     budgets = _get_budgets(intent)
     history_budget = budgets["history_budget"]
     docs_budget = budgets["docs_budget"]
@@ -270,15 +400,6 @@ async def generate_answer(state: AgentState):
     # it's signaled via the user message content rather than a dynamic style prefix.
 
     if intent in ["direct_rag", "specific_doc_rag"]:
-        targeting_context = ""
-        semantic_maps = state.get('semantic_queries', [])
-        if semantic_maps:
-            map_str = "\n".join([f"- Querying '{s['query']}' against '{s['target'] if s['target'] else 'Global Knowledge'}'" for s in semantic_maps])
-            targeting_context = f"\n[SEARCH STRATEGY] I segmented your request as follows:\n{map_str}\n"
-        elif intent == "specific_doc_rag" and state.get('targeted_docs'):
-            targeting_list = ", ".join(state['targeted_docs'])
-            targeting_context = f"\n[IMPORTANT] The user specifically requested info from: {targeting_list}."
-
         if not context_block.strip():
             context_block = (
                 "No sufficiently relevant knowledge-base chunks were retrieved for this query. "
@@ -286,31 +407,25 @@ async def generate_answer(state: AgentState):
                 "and ask the user to upload or target the relevant document."
             )
 
-        detail_instruction = ""
-        if wants_detail:
-            detail_instruction = (
-                "\n[ANSWER DEPTH]\n"
-                "The user explicitly asked for detail. Provide a complete structured answer with the relevant facts, "
-                "steps, exceptions, and citations from the retrieved evidence. Do not stay artificially brief.\n"
-            )
-        multi_doc_instruction = ""
-        targeted_docs = state.get("targeted_docs") or []
-        if len(targeted_docs) > 1:
-            multi_doc_instruction = (
-                "\n[MULTI-DOCUMENT REQUIREMENT]\n"
-                f"The user targeted multiple documents: {', '.join(targeted_docs)}. Cover each targeted document "
-                "in a clearly labeled section before giving any combined comparison. If evidence for one target is thin, "
-                "state the specific evidence that was retrieved instead of ignoring that document.\n"
-            )
+        legacy_messages = _build_legacy_rag_messages(
+            state=state,
+            context_block=context_block,
+            latest_query=latest_query,
+            intent=intent,
+            wants_detail=wants_detail,
+        )
+        final_messages = legacy_messages
 
-        rag_prompt = f"""{targeting_context}{detail_instruction}{multi_doc_instruction}
-<docs>
-{context_block}
-</docs>
-Q: {latest_query}
-"""
-        final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
-        final_messages.append({"role": "user", "content": rag_prompt})
+        if cfg.session_memory_enabled:
+            compact_messages = _build_compact_memory_rag_messages(
+                state=state,
+                context_block=context_block,
+                latest_query=latest_query,
+            )
+            if _compact_rag_within_guardrail(legacy_messages, compact_messages):
+                final_messages = compact_messages
+            else:
+                logger.info("[GENERATE] Session memory prompt exceeded guardrail; using legacy RAG prompt")
     else:
         final_messages = [{"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}]
         for m in prepared_msgs:

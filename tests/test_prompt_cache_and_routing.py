@@ -10,12 +10,20 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from backend.graph.nodes.generate import (
     _GENERATOR_SYSTEM_PROMPT,
     _SUMMARY_PREFIX,
+    _build_compact_memory_rag_messages,
+    _build_legacy_rag_messages,
     _build_message_list,
+    _build_retrieval_context_block,
+    _build_session_control_block,
+    _build_session_memory_block,
+    _compact_rag_within_guardrail,
+    _estimated_message_tokens,
     _get_budgets,
     generate_answer,
     is_detail_request,
     prepare_docs_for_generation,
 )
+from backend.config import reload_config
 from backend.graph.nodes.planner import (
     _ACRONYM_CACHE,
     _build_semantic_queries,
@@ -33,6 +41,16 @@ from backend.graph.nodes.planner import (
     planner_node,
 )
 
+
+def test_session_memory_env_flag_defaults_false_and_enables_explicitly(monkeypatch):
+    monkeypatch.setenv("RAG_SESSION_MEMORY_ENABLED", "false")
+    assert reload_config().session_memory_enabled is False
+
+    monkeypatch.setenv("RAG_SESSION_MEMORY_ENABLED", "true")
+    assert reload_config().session_memory_enabled is True
+
+    monkeypatch.delenv("RAG_SESSION_MEMORY_ENABLED", raising=False)
+    assert reload_config().session_memory_enabled is False
 
 def test_local_summary_compaction_is_stable_until_next_overflow():
     messages = []
@@ -99,6 +117,185 @@ def test_detail_request_detection_expands_only_when_explicit():
     assert is_detail_request("Give a step by step explanation")
     assert not is_detail_request("What is this paper about?")
 
+
+def test_legacy_rag_prompt_preserves_disabled_path_shape():
+    state = {
+        "semantic_queries": [{"query": "authors", "target": "Qlora_Paper.pdf"}],
+        "targeted_docs": ["Qlora_Paper.pdf", "Attention.pdf"],
+    }
+
+    messages = _build_legacy_rag_messages(
+        state=state,
+        context_block="[1] Retrieved chunk 1\nQLoRA evidence",
+        latest_query="Explain in detail and compare both files",
+        intent="specific_doc_rag",
+        wants_detail=True,
+    )
+
+    assert len(messages) == 2
+    assert messages[0] == {"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}
+    assert messages[1]["role"] == "user"
+    prompt = messages[1]["content"]
+    assert "[SEARCH STRATEGY]" in prompt
+    assert "[ANSWER DEPTH]" in prompt
+    assert "[MULTI-DOCUMENT REQUIREMENT]" in prompt
+    assert "<docs>" in prompt
+    assert "QLoRA evidence" in prompt
+    assert "Q: Explain in detail and compare both files" in prompt
+    assert "[SESSION MEMORY]" not in prompt
+    assert "[SESSION CONTROL]" not in prompt
+
+
+def test_session_memory_block_is_compact_and_skips_latest_query():
+    latest = "Who are the authors?"
+    state = {
+        "query": latest,
+        "summary": f"{_SUMMARY_PREFIX}: Earlier discussion was about QLoRA memory savings and NF4 quantization.",
+        "targeted_docs": ["Qlora_Paper.pdf"],
+        "messages": [
+            HumanMessage(content="What is QLoRA about?"),
+            AIMessage(content="A long answer that should not be copied into session memory. " * 20),
+            HumanMessage(content=latest),
+        ],
+    }
+
+    block = _build_session_memory_block(state)
+
+    assert block.startswith("[SESSION MEMORY]")
+    assert "QLoRA memory savings" in block
+    assert "Qlora_Paper.pdf" in block
+    assert "What is QLoRA about?" in block
+    assert latest not in block
+    assert "long answer" not in block
+    assert len(block) <= 800
+
+
+def test_compact_rag_prompt_has_stable_blocks_and_latest_query_last():
+    state = {
+        "query": "What are the important gotchas?",
+        "intent": "specific_doc_rag",
+        "mode": "auto",
+        "context_action": "retrieve",
+        "targeted_docs": ["LeaveAtaGlance.pdf"],
+        "messages": [HumanMessage(content="Summarize LeaveAtaGlance.pdf")],
+    }
+
+    messages = _build_compact_memory_rag_messages(
+        state=state,
+        context_block="[1] Retrieved chunk 1\nLeave evidence",
+        latest_query="What are the important gotchas?",
+    )
+
+    assert messages[0] == {"role": "system", "content": _GENERATOR_SYSTEM_PROMPT}
+    assert messages[-1] == {"role": "user", "content": "What are the important gotchas?"}
+    contents = "\n".join(message["content"] for message in messages)
+    assert "[SESSION CONTROL]" in contents
+    assert "intent=specific_doc_rag" in contents
+    assert "targeted_docs=LeaveAtaGlance.pdf" in contents
+    assert "[RETRIEVAL CONTEXT]" in contents
+    assert "<docs>" in contents
+    assert "Leave evidence" in contents
+
+
+def test_retrieval_context_block_wraps_current_chunks_only():
+    block = _build_retrieval_context_block("[1] current chunk")
+
+    assert block == "[RETRIEVAL CONTEXT]\n<docs>\n[1] current chunk\n</docs>"
+
+
+def test_session_control_includes_mode_intent_action_and_targets():
+    block = _build_session_control_block({
+        "mode": "auto",
+        "intent": "specific_doc_rag",
+        "context_action": "hybrid",
+        "targeted_docs": ["A.pdf", "B.pdf"],
+    })
+
+    assert "mode=auto" in block
+    assert "intent=specific_doc_rag" in block
+    assert "context_action=hybrid" in block
+    assert "targeted_docs=A.pdf, B.pdf" in block
+
+
+def test_compact_prompt_guardrail_bounds_added_memory():
+    legacy = [{"role": "system", "content": "s"}, {"role": "user", "content": "x" * 2000}]
+    compact_ok = legacy + [{"role": "system", "content": "small memory"}]
+    compact_too_large = legacy + [{"role": "system", "content": "oversized memory " * 1000}]
+
+    assert _estimated_message_tokens(compact_ok) >= _estimated_message_tokens(legacy)
+    assert _compact_rag_within_guardrail(legacy, compact_ok)
+    assert not _compact_rag_within_guardrail(legacy, compact_too_large)
+
+class _CapturingChatClient:
+    def __init__(self):
+        self.messages = None
+
+    async def astream(self, messages):
+        self.messages = messages
+        yield AIMessage(content="captured answer")
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_uses_legacy_rag_prompt_when_session_memory_disabled(monkeypatch):
+    monkeypatch.setenv("RAG_SESSION_MEMORY_ENABLED", "false")
+    reload_config()
+    client = _CapturingChatClient()
+
+    with patch("backend.graph.nodes.generate.OllamaClientWrapper.get_chat_model", return_value=client):
+        result = await generate_answer({
+            "messages": [HumanMessage(content="What is @Qlora_Paper.pdf about?")],
+            "query": "What is @Qlora_Paper.pdf about?",
+            "intent": "specific_doc_rag",
+            "mode": "auto",
+            "targeted_docs": ["Qlora_Paper.pdf"],
+            "documents": ["[Source: Qlora_Paper.pdf]\nQLoRA evidence"],
+            "summary": "",
+        })
+
+    assert result["messages"][0].content == "captured answer"
+    assert client.messages is not None
+    assert len(client.messages) == 2
+    prompt = client.messages[1]["content"]
+    assert "[IMPORTANT]" in prompt
+    assert "<docs>" in prompt
+    assert "QLoRA evidence" in prompt
+    assert "Q: What is @Qlora_Paper.pdf about?" in prompt
+    assert "[SESSION MEMORY]" not in prompt
+    assert "[SESSION CONTROL]" not in prompt
+    assert "[RETRIEVAL CONTEXT]" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_uses_compact_rag_prompt_when_session_memory_enabled(monkeypatch):
+    monkeypatch.setenv("RAG_SESSION_MEMORY_ENABLED", "true")
+    reload_config()
+    client = _CapturingChatClient()
+
+    with patch("backend.graph.nodes.generate.OllamaClientWrapper.get_chat_model", return_value=client):
+        result = await generate_answer({
+            "messages": [
+                HumanMessage(content="What is QLoRA about?"),
+                AIMessage(content="It is about efficient finetuning."),
+                HumanMessage(content="Who are the authors?"),
+            ],
+            "query": "Who are the authors?",
+            "intent": "specific_doc_rag",
+            "mode": "auto",
+            "context_action": "retrieve",
+            "targeted_docs": ["Qlora_Paper.pdf"],
+            "documents": ["[Source: Qlora_Paper.pdf]\nAuthors evidence" * 80],
+            "summary": "QLoRA paper topic was already established.",
+        })
+
+    assert result["messages"][0].content == "captured answer"
+    assert client.messages is not None
+    contents = "\n".join(message["content"] for message in client.messages)
+    assert client.messages[-1] == {"role": "user", "content": "Who are the authors?"}
+    assert "[SESSION MEMORY]" in contents
+    assert "[SESSION CONTROL]" in contents
+    assert "[RETRIEVAL CONTEXT]" in contents
+    assert "Authors evidence" in contents
+    assert "What is QLoRA about?" in contents
 
 @pytest.mark.asyncio
 async def test_simple_greeting_fast_path_skips_model_call():
